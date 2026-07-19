@@ -11,11 +11,18 @@ JPEG_QUALITY = 85
 
 def shrink_cover_image(raw_bytes: bytes) -> bytes:
     """Redimensionne (si nécessaire) et recompresse en JPEG. Retourne les
-    bytes d'origine si l'image est illisible ou déjà assez petite/légère."""
+    bytes d'origine si l'image est illisible, trop grande pour être ouverte
+    en sécurité, ou déjà assez petite/légère."""
     try:
         image = Image.open(io.BytesIO(raw_bytes))
         image.load()
-    except UnidentifiedImageError:
+    # UnidentifiedImageError : format non reconnu. OSError : fichier tronqué/
+    # corrompu (levée par load()). DecompressionBombError : image aux
+    # dimensions déclarées excessives (protection PIL contre les "bombes de
+    # décompression"). Dans les trois cas la couverture est accessoire : on
+    # renvoie les bytes d'origine plutôt que de faire échouer tout l'appelant
+    # (le parsing complet du livre, avant ce correctif).
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
         return raw_bytes
 
     if image.width > MAX_WIDTH_PX:

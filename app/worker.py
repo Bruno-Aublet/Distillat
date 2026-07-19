@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from app import epub_parser, gemini_client, pdf_parser
+from app import config, epub_parser, gemini_client, pdf_parser
 from app.book_report import BookReport
 from app.epub_parser import BookContent
 from app.quota_tracker import QuotaSnapshot, QuotaTracker
@@ -51,6 +51,7 @@ class SummarizeWorker(QThread):
                 on_progress=on_progress,
                 on_quota_update=on_quota_update,
                 on_retry_wait=on_retry_wait,
+                settings_dir=config.get_settings_dir(),
             )
             self.finished_ok.emit(result)
         except Exception as exc:  # noqa: BLE001 - on veut afficher toute erreur à l'utilisateur

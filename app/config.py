@@ -1,5 +1,5 @@
 """Gestion de la clé API Gemini (stockée chiffrée via le Gestionnaire
-d'identification Windows, par le module keyring — jamais en clair sur disque),
+d'identification Windows, par le module keyring - jamais en clair sur disque),
 et des emplacements de stockage persistants (indépendants du dossier de
 l'application, pour ne pas perdre ces données si l'utilisateur
 supprime/remplace le dossier de l'exe)."""
@@ -9,9 +9,8 @@ import sys
 from pathlib import Path
 
 import keyring
-from dotenv import load_dotenv
+from keyring.errors import KeyringError
 
-ENV_VAR_NAME = "GEMINI_API_KEY"
 APP_FOLDER_NAME = "Distillat"
 KEYRING_SERVICE_NAME = "Distillat"
 KEYRING_USERNAME = "gemini_api_key"
@@ -39,9 +38,10 @@ def get_app_icon_path() -> Path:
 
 
 def get_settings_dir() -> Path:
-    """Dossier pour les données techniques (.env, compteur de quota) :
-    %APPDATA%\\Distillat en mode gelé, dossier du projet en développement.
-    Indépendant du dossier de l'exe pour survivre à une réinstallation."""
+    """Dossier pour les données techniques (compteur de quota, prompts et
+    limites personnalisés) : %APPDATA%\\Distillat en mode gelé, dossier du
+    projet en développement. Indépendant du dossier de l'exe pour survivre à
+    une réinstallation."""
     if getattr(sys, "frozen", False):
         appdata = os.environ.get("APPDATA")
         base = Path(appdata) if appdata else get_app_dir()
@@ -53,14 +53,10 @@ def get_settings_dir() -> Path:
 
 def get_reports_dir() -> Path:
     """Dossier où sauvegarder/charger les fiches (.distillat.json) et les
-    exports Word : Documents\\Distillat\\Fiches en mode gelé, dossier du
-    projet en développement. Indépendant du dossier de l'exe pour survivre
-    à une réinstallation."""
-    if getattr(sys, "frozen", False):
-        documents = Path.home() / "Documents"
-        reports_dir = documents / APP_FOLDER_NAME / "Fiches"
-    else:
-        reports_dir = get_app_dir() / "Fiches"
+    exports PDF : Documents\\Distillat\\Fiches, en mode développement comme
+    en mode compilé. Indépendant du dossier de l'exe pour survivre à une
+    réinstallation."""
+    reports_dir = Path.home() / "Documents" / APP_FOLDER_NAME / "Fiches"
     reports_dir.mkdir(parents=True, exist_ok=True)
     return reports_dir
 
@@ -75,14 +71,13 @@ def migrate_legacy_files() -> None:
 
     legacy_dir = get_app_dir()
 
-    for filename in (".env", ".quota_state.json"):
-        legacy_path = legacy_dir / filename
-        new_path = get_settings_dir() / filename
-        if legacy_path.exists() and not new_path.exists():
-            try:
-                shutil.move(str(legacy_path), str(new_path))
-            except OSError:
-                pass
+    legacy_path = legacy_dir / ".quota_state.json"
+    new_path = get_settings_dir() / ".quota_state.json"
+    if legacy_path.exists() and not new_path.exists():
+        try:
+            shutil.move(str(legacy_path), str(new_path))
+        except OSError:
+            pass
 
     legacy_reports_dir = legacy_dir / "Fiches"
     if legacy_reports_dir.is_dir():
@@ -102,36 +97,23 @@ def migrate_legacy_files() -> None:
             pass
 
 
-def get_env_path() -> Path:
-    """Ancien emplacement de stockage de la clé API (fichier .env en clair),
-    conservé uniquement pour la migration ponctuelle vers keyring."""
-    return get_settings_dir() / ".env"
-
-
-def _migrate_legacy_env_api_key() -> None:
-    """Reprend une clé API laissée en clair dans un .env par une ancienne
-    version, la stocke via keyring, puis supprime le fichier .env."""
-    env_path = get_env_path()
-    if not env_path.exists():
-        return
-    load_dotenv(dotenv_path=env_path, override=True)
-    legacy_key = os.environ.get(ENV_VAR_NAME)
-    if legacy_key and not keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME):
-        keyring.set_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME, legacy_key)
-    try:
-        env_path.unlink()
-    except OSError:
-        pass
-
-
 def load_api_key() -> str | None:
-    _migrate_legacy_env_api_key()
-    api_key = keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
-    if api_key:
-        os.environ[ENV_VAR_NAME] = api_key
-    return api_key
+    """Retourne None aussi si le Gestionnaire d'identification Windows est
+    indisponible (KeyringError) : sans ce garde-fou, l'appel fait au
+    démarrage de l'application (avant même l'affichage de la fenêtre) la
+    ferait planter au lancement, sans aucun recours pour l'utilisateur."""
+    try:
+        return keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
+    except KeyringError:
+        return None
 
 
-def save_api_key(api_key: str) -> None:
-    keyring.set_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME, api_key)
-    os.environ[ENV_VAR_NAME] = api_key
+def save_api_key(api_key: str) -> bool:
+    """Retourne False (au lieu de laisser l'exception remonter) si le
+    Gestionnaire d'identification Windows est indisponible ; à l'appelant
+    d'en informer l'utilisateur."""
+    try:
+        keyring.set_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME, api_key)
+        return True
+    except KeyringError:
+        return False

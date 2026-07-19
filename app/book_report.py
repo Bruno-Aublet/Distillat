@@ -9,6 +9,31 @@ from app.cover_image import shrink_cover_image
 
 FILE_FORMAT_VERSION = 2
 
+# Caractères, en plus des lettres/chiffres, autorisés dans un nom de fichier
+# généré automatiquement. Exclut uniquement les caractères réellement
+# interdits par Windows (< > : " / \ | ? *), pas la ponctuation courante des
+# titres de livres (parenthèses, virgule, point, apostrophe droite ' ou
+# typographique '...).
+SAFE_FILENAME_EXTRA_CHARS = " -_(),.'’!"
+
+# Noms de fichier réservés par Windows, quelle que soit leur extension.
+_RESERVED_WINDOWS_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def sanitize_filename(base: str, fallback: str = "livre") -> str:
+    """Retire d'une chaîne les caractères interdits dans un nom de fichier
+    Windows, en conservant la ponctuation courante des titres de livres."""
+    safe_base = "".join(c for c in base if c.isalnum() or c in SAFE_FILENAME_EXTRA_CHARS).strip()
+    # Windows tronque silencieusement les points/espaces finaux d'un nom de
+    # fichier, et interdit certains noms (CON, NUL, COM1...) quelle que soit
+    # leur extension.
+    safe_base = safe_base.rstrip(" .")
+    if not safe_base or safe_base.upper() in _RESERVED_WINDOWS_NAMES:
+        return fallback
+    return safe_base
+
 
 @dataclass
 class Character:
@@ -27,6 +52,12 @@ class BookReport:
     cover_image: bytes | None = None
     was_split: bool = False
     chapter_count: int = 1
+    # Texte que Gemini a produit en trop après le premier objet JSON exploité
+    # (rare, cas d'une réponse mal formée) : conservé en mémoire pour que
+    # l'utilisateur puisse le consulter et le récupérer à la main si c'est du
+    # contenu légitime, mais jamais persisté (ni JSON, ni export PDF) car il
+    # ne fait pas partie du contenu validé de la fiche.
+    extra_generated_text: str = ""
 
     def to_json(self) -> str:
         data = {
@@ -45,23 +76,17 @@ class BookReport:
 
     @staticmethod
     def from_json(raw: str) -> "BookReport":
-        report, _ = BookReport._from_json_with_shrink_flag(raw)
-        return report
-
-    @staticmethod
-    def _from_json_with_shrink_flag(raw: str) -> tuple["BookReport", bool]:
         data = json.loads(raw)
         cover_b64 = data.get("cover_image_base64")
         cover_image = base64.b64decode(cover_b64) if cover_b64 else None
-        cover_was_shrunk = False
         if cover_image:
             # Remet aux normes actuelles une couverture provenant d'une fiche
             # plus ancienne ou générée avant l'introduction de la réduction
-            # automatique (pas d'effet si elle est déjà assez légère).
-            shrunk = shrink_cover_image(cover_image)
-            cover_was_shrunk = shrunk != cover_image
-            cover_image = shrunk
-        report = BookReport(
+            # automatique (pas d'effet si elle est déjà assez légère). Reste
+            # en mémoire uniquement : ne réécrit pas le fichier source, une
+            # simple lecture ne doit pas modifier le fichier sur disque.
+            cover_image = shrink_cover_image(cover_image)
+        return BookReport(
             book_title=data["book_title"],
             author=data["author"],
             summary_text=data["summary_text"],
@@ -74,29 +99,17 @@ class BookReport:
             analysis_text=data.get("analysis_text", ""),
             cover_image=cover_image,
         )
-        return report, cover_was_shrunk
 
     def save(self, path: Path) -> None:
         path.write_text(self.to_json(), encoding="utf-8")
 
     @staticmethod
     def load(path: Path) -> "BookReport":
-        report, cover_was_shrunk = BookReport._from_json_with_shrink_flag(path.read_text(encoding="utf-8"))
-        if cover_was_shrunk:
-            # La fiche sur disque contenait une couverture surdimensionnée :
-            # on la réécrit immédiatement avec la version allégée, pour que
-            # le gain de place profite aussi au fichier, pas seulement à la
-            # session en mémoire.
-            try:
-                report.save(path)
-            except OSError:
-                pass
-        return report
+        return BookReport.from_json(path.read_text(encoding="utf-8"))
 
     def suggested_filename(self, source_stem: str | None = None) -> str:
         """Nom de fichier suggéré pour la sauvegarde JSON. Basé sur le nom du
         fichier source (EPUB/PDF, sans extension) quand il est connu, sinon
         replié sur le titre du livre (ex: fiche rechargée depuis un JSON)."""
         base = source_stem or self.book_title
-        safe_base = "".join(c for c in base if c.isalnum() or c in " -_").strip()
-        return f"{safe_base or 'livre'}.distillat.json"
+        return f"{sanitize_filename(base)}.distillat.json"

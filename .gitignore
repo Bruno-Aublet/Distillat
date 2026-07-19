@@ -1,5 +1,7 @@
 .env
 .quota_state.json
+quota_limits.json
+prompts.json
 __pycache__/
 *.pyc
 build/
@@ -8,3 +10,7 @@ dist/
 .venv/
 venv/
 .vscode/
+.claude/
+CLAUDE.md
+RELEASE.txt
+à faire.txt

@@ -1,11 +1,47 @@
 """Extraction du texte d'un fichier PDF."""
+import io
 from pathlib import Path
 
+import pypdfium2 as pdfium
 from pypdf import PdfReader
 
+from app.cover_image import shrink_cover_image
 from app.epub_parser import Chapter, BookContent
 
 PAGES_PER_CHAPTER = 20
+
+# Largeur de rendu de la couverture : un peu au-dessus du MAX_WIDTH_PX de
+# shrink_cover_image, qui la ramènera à sa taille de stockage définitive.
+_COVER_RENDER_WIDTH_PX = 900
+
+
+def extract_pdf_cover(file_path: str) -> bytes | None:
+    """Rend la première page du PDF en image (via pypdfium2) pour servir de
+    couverture, telle qu'elle s'afficherait à l'écran : fonctionne quel que
+    soit son contenu (image pleine page, composition de plusieurs images,
+    page de titre en texte...)."""
+    document = None
+    try:
+        document = pdfium.PdfDocument(file_path)
+        page = document[0]
+        page_width, _ = page.get_size()
+        scale = _COVER_RENDER_WIDTH_PX / page_width
+        bitmap = page.render(scale=scale)
+        pil_image = bitmap.to_pil()
+        output = io.BytesIO()
+        pil_image.convert("RGB").save(output, format="JPEG", quality=90)
+        return shrink_cover_image(output.getvalue())
+    except Exception:  # noqa: BLE001 - pas de couverture ne doit pas bloquer le parsing
+        return None
+    finally:
+        # Sans fermeture explicite, pypdfium2 garde un verrou sur le fichier
+        # (l'utilisateur ne pourrait plus le déplacer/supprimer tant que
+        # l'application est ouverte).
+        if document is not None:
+            try:
+                document.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def parse_pdf(file_path: str) -> BookContent:
@@ -41,4 +77,5 @@ def parse_pdf(file_path: str) -> BookContent:
         author=author,
         full_text=full_text,
         chapters=chapters,
+        cover_image=extract_pdf_cover(file_path),
     )

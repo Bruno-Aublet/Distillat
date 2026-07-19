@@ -1,8 +1,276 @@
 # Changelog
 
-## [1.0.0] - 2026-07-18 - Première version
+## [1.1.0] - 2026-07-19 - Sécurité, fiabilité des appels Gemini, prompts personnalisables, édition manuelle, export PDF et ergonomie
 
-### Ajouté
+- Un problème avec le Gestionnaire d'identification Windows (service
+  indisponible, profil corrompu...) faisait planter l'application dès son
+  lancement, avant même l'affichage de la fenêtre, puisque la clé API y est
+  lue dès le démarrage. Ce cas est désormais traité comme l'absence de clé
+  (l'application démarre normalement, sans clé pré-remplie) ; un message
+  d'erreur explicite s'affiche si l'enregistrement d'une clé échoue pour la
+  même raison.
+- Retrait de la migration ponctuelle d'une ancienne clé API stockée en clair
+  dans un fichier `.env` (mécanisme antérieur au stockage chiffré actuel via
+  keyring) : n'ayant plus lieu d'être, elle exposait un scénario de perte
+  silencieuse de clé (fichier `.env` supprimé sans avoir été repris si
+  keyring contenait déjà une clé différente). Dépendance `python-dotenv`
+  retirée avec elle.
+- La clé API Gemini, chargée ou enregistrée via keyring, était aussi copiée
+  dans une variable d'environnement du processus, sans que rien ne la relise
+  jamais depuis là (la clé circule explicitement de fonction en fonction).
+  Cette copie superflue, potentiellement lisible par d'autres logiciels
+  inspectant le processus, est retirée.
+- Charger une fiche `.distillat.json` dont la couverture était surdimensionnée
+  (fiche ancienne, antérieure à la réduction automatique des couvertures)
+  réécrivait immédiatement le fichier source avec la couverture allégée, un
+  effet de bord surprenant pour une simple lecture. La réduction de la
+  couverture ne s'applique désormais qu'en mémoire, sans plus jamais modifier
+  le fichier chargé ; elle profite tout de même à une éventuelle prochaine
+  sauvegarde explicite de la fiche.
+- Un repère entre accolades mal orthographié (ex : `{full_textt}`) dans un
+  prompt personnalisé via le bouton **Prompts** faisait échouer la
+  génération avec un message d'erreur minimal (juste le nom du repère en
+  cause). Le message indique désormais clairement quel prompt personnalisé
+  est en cause et quel repère n'est pas reconnu.
+- Le mode JSON natif de Gemini garantit une syntaxe JSON valide, mais pas que
+  la réponse respecte la forme demandée dans le prompt (objet avec les bons
+  champs). Une réponse de forme inattendue (racine JSON qui n'est pas un
+  objet, entrée de personnage qui n'est pas un objet...) affichait un message
+  d'erreur technique brut au lieu d'un message compréhensible ; ce dernier
+  cas est désormais simplement ignoré (l'entrée invalide est écartée, les
+  autres personnages restent exploités) et le premier affiche un message
+  d'erreur clair.
+- Nouveau bouton **Prompts**, qui ouvre une fenêtre permettant de consulter et
+  de modifier les prompts envoyés à Gemini, chacun dans sa propre zone de 
+  saisie avec son propre bouton de réinitialisation au prompt par défaut. Un avertissement précise que ces prompts fonctionnent tels quels et que les 
+  modifier peut faire échouer la génération ; si un repère entre accolades
+  (ex : `{book_title}`) est mal orthographié, un message clair l'indique
+  au lieu d'un message d'erreur technique minimal, et un problème
+  d'enregistrement sur disque (disque plein, permissions refusées...) est
+  également signalé explicitement plutôt que silencieusement ignoré. Ce
+  bouton est désactivé pendant qu'une génération est en cours.
+- Pour un livre trop volumineux pour tenir dans une seule requête, la
+  génération envoyait une requête Gemini par chapitre pour le résumé, puis
+  une requête séparée sur le texte intégral du livre pour les personnages et
+  l'analyse littéraire. La première pouvait à elle seule dépasser, en
+  quelques dizaines de chapitres, le quota gratuit journalier (20
+  requêtes/jour par défaut) et faire échouer la génération en cours de
+  route ; la seconde renvoyait inutilement un texte déjà couvert par les
+  résumés de chapitre. Le livre est désormais réparti en lots de plusieurs
+  chapitres consécutifs (le plus possible à la fois selon sa taille), résumés
+  lot par lot, puis une seule requête finale reçoit l'ensemble de ces résumés
+  et produit le résumé court, le résumé détaillé, les personnages et
+  l'analyse littéraire.
+- Un titre de chapitre (ou de section) suffisamment long pour être replié sur
+  plusieurs lignes à l'affichage dans un onglet ressortait coupé en deux dans
+  la fiche sauvegardée et dans l'export PDF : la seconde partie du titre était
+  alors traitée comme un nouveau paragraphe de corps de texte, avec une
+  lettrine appliquée dessus par erreur. En cause, la reconstruction du texte à
+  sauvegarder se basait sur le rendu Markdown recoupé par Qt à l'affichage
+  (un artefact purement visuel), au lieu du texte réellement affiché ; elle se
+  base désormais sur ce dernier, réassocié au texte source d'origine pour n'y
+  reporter que les véritables éditions de l'utilisateur.
+- Le dialogue **Limites de quota** n'indiquait pas explicitement le modèle
+  Gemini concerné, alors que les limites diffèrent d'un modèle à l'autre. Le
+  nom du modèle utilisé (`gemini-3.5-flash`) est désormais affiché en haut
+  du dialogue.
+- Le chrono affiché pendant la génération (« ... (écoulé : 1 min 23 s) »)
+  disparaissait en cas d'échec, remplacé par un simple « Une erreur est
+  survenue. » sans indication de durée. Le message affiche désormais
+  « Échec après {durée}. », symétrique au « Terminé en {durée}. » du succès ;
+  les deux messages sont aussi mis en couleur (vert pour un succès, rouge
+  pour un échec) pour une lecture plus rapide.
+- Fiabilisation des appels à l'API Gemini :
+  - Il arrivait que Gemini renvoie une réponse JSON syntaxiquement invalide
+    (guillemet ou virgule mal placés dans le texte généré), provoquant une
+    erreur « Réponse de Gemini illisible » et la perte de la requête (et du
+    quota associé). Les appels attendant du JSON en retour (résumés,
+    personnages, analyse) utilisent désormais le mode JSON natif de l'API
+    Gemini, qui garantit une sortie syntaxiquement valide côté serveur et
+    réduit fortement le risque de ce type d'échec.
+  - En cas de quota Gemini dépassé (erreur 429), l'application retentait
+    automatiquement la requête même lorsque le quota concerné était le quota
+    **journalier** (RPD), qui ne se réinitialise qu'à minuit : ces tentatives
+    étaient vouées à l'échec et ne faisaient que retarder l'affichage de
+    l'erreur. Seuls les quotas par minute (RPM/TPM), qui peuvent se libérer
+    en attendant, déclenchent désormais un nouvel essai automatique.
+  - Les erreurs de l'API Gemini (quota dépassé, service indisponible, clé
+    API invalide...) affichaient un message technique brut. Elles affichent
+    désormais un message explicatif en français adapté à chaque cas, avec le
+    code d'erreur d'origine entre parenthèses à titre indicatif.
+  - Les erreurs Gemini 500 (erreur interne) et 504 (délai dépassé)
+    n'étaient ni retentées automatiquement ni traduites en français,
+    contrairement aux autres erreurs de l'API : l'utilisateur voyait un
+    message technique brut et la génération échouait immédiatement au lieu
+    de réessayer. Elles bénéficient désormais du même traitement que le
+    service temporairement indisponible (503) : nouvel essai automatique,
+    message explicatif en cas d'échec persistant.
+  - Une réponse bloquée par les filtres de sécurité de Gemini (contenu du
+    livre jugé sensible) provoquait une erreur technique brute au lieu d'un
+    message explicatif ; c'est désormais corrigé.
+  - Il arrivait aussi que Gemini renvoie du contenu superflu après un premier
+    objet JSON par ailleurs valide (ex : un second objet accolé), provoquant
+    une erreur « Extra data » et, là encore, la perte de la requête. Ce cas
+    est désormais toléré : seul le premier objet JSON est exploité pour
+    construire la fiche. Le contenu ignoré n'est jamais perdu ni supprimé
+    silencieusement : un message discret apparaît sous la zone de statut
+    (« Du contenu supplémentaire généré par Gemini a été ignoré »), qui ouvre
+    une fenêtre non modale où le texte peut être consulté et copié à la main
+    s'il s'avère légitime.
+- Ajustements du contenu généré :
+  - Résumé court ramené à deux à trois paragraphes maximum (au lieu de trois à
+    quatre), pour rester réellement synthétique.
+  - La sélection des personnages principaux variait sensiblement d'une
+    génération à l'autre pour un même livre (critère « significatifs pour
+    l'intrigue » trop subjectif). Le critère est désormais opérationnel
+    (apparition récurrente ET impact direct sur l'intrigue) avec une fourchette
+    indicative de 3 à 20 personnages selon la richesse du roman.
+  - L'onglet Personnages peut désormais aussi contenir des fiches pour les
+    groupes ou organisations centraux à l'intrigue (faction, conseil, armée,
+    famille, société secrète...), pas seulement des personnages individuels.
+    La fiche d'exemple inclut maintenant "Le Conseil des Mages" pour
+    l'illustrer.
+  - Les titres de section du résumé détaillé étaient renvoyés par Gemini en
+    texte nu, sans le préfixe `##` attendu par le format interne (une ligne =
+    un paragraphe ou un titre `#`) : ils étaient donc rendus comme de simples
+    paragraphes au lieu de titres stylés, et dans l'export PDF le premier
+    d'entre eux recevait à tort la lettrine et une justification. Les prompts
+    par défaut du rapport complet et de la consolidation demandent désormais
+    explicitement de faire précéder chaque titre de section de `## ` (et
+    `### ` pour un sous-titre), et les trois prompts par défaut proscrivent
+    toute autre mise en forme Markdown. Un prompt personnalisé via le bouton
+    **Prompts** n'est pas affecté ; le réinitialiser au prompt par défaut
+    pour bénéficier de la correction.
+- Affichage et édition dans les onglets :
+  - Le contenu de tous les onglets est désormais directement éditable au
+    clavier, au lieu d'être en lecture seule : les résumés, l'analyse, le nom
+    et la description de chaque personnage ou groupe, ainsi que le titre du
+    livre et le nom de l'auteur sur l'onglet Couverture. Toute édition est
+    reprise automatiquement lors d'une sauvegarde (fiche `.distillat.json` ou
+    export `.pdf`) ; un titre ou un auteur vidé est ignoré (l'ancienne valeur
+    est conservée).
+  - Les titres de section que Gemini structure en Markdown (`#`, `##`, `###`...)
+    s'affichaient tels quels dans les onglets, balises comprises. Ils sont
+    désormais rendus mis en forme (gras, taille selon le niveau) sans les
+    dièses visibles, tout en restant restitués intacts à la sauvegarde (l'export
+    PDF continue de les interpréter pour ses propres titres stylés). Un léger
+    espacement entre paragraphes aère aussi l'affichage des onglets, et le
+    texte y est désormais justifié (résumés, analyse, descriptions de
+    personnages), sans que cela modifie le texte sauvegardé. La syntaxe
+    Markdown de lien/image (potentiellement présente dans le texte généré par
+    Gemini à partir du contenu du livre traité) est neutralisée à l'affichage,
+    pour ne jamais faire charger involontairement le contenu d'un fichier
+    local via une image `![alt](file:///...)`.
+- L'export du document (bouton **Sauvegarder en .pdf**) produit désormais un
+  fichier PDF avec une mise en page éditoriale soignée (page de titre avec
+  couverture, intitulés de section sur bandeau de couleur, fiches personnages
+  mises en valeur, pied de page avec titre du livre et numéro de page), à la
+  place de l'ancien export Word (`.docx`). Repose sur
+  [ReportLab](https://www.reportlab.com/), une bibliothèque Python pure sans
+  dépendance système externe.
+- Les livres PDF n'avaient jamais de couverture dans leur fiche (limitation
+  documentée depuis la première version). La première page du PDF est
+  désormais rendue en image (via pypdfium2, licence BSD/Apache) et sert de
+  couverture, quel que soit son contenu : image pleine page, composition de
+  plusieurs images ou simple page de titre en texte. Une image de couverture
+  illisible (fichier tronqué, ou dimensions déclarées excessives déclenchant
+  la protection anti "bombe de décompression" de PIL) faisait par ailleurs
+  échouer tout le traitement du livre, alors que la couverture est
+  accessoire ; ce type d'image est désormais ignoré (la fiche est produite
+  sans couverture), comme c'était déjà le cas pour un format d'image non
+  reconnu.
+- Emplacements d'enregistrement : le dossier proposé par défaut (fiches,
+  exports PDF, chargement) est désormais `Documents\Distillat\Fiches` dans
+  tous les modes, y compris en développement (qui utilisait le dossier
+  `Fiches/` du projet). Si la fiche affichée a été chargée depuis un fichier,
+  c'est son dossier d'origine qui est proposé, avec son nom de fichier ; la
+  réenregistrer sur son fichier d'origine ne demande plus de confirmation de
+  remplacement (elle vient d'y être ouverte) et affiche simplement un message
+  de modification réussie. La confirmation reste posée si la cible est un
+  autre fichier existant.
+- Une fiche `.distillat.json` corrompue ou de forme inattendue (racine JSON
+  qui n'est pas un objet, personnage sans nom ou description...) faisait
+  planter l'application au lieu d'afficher le message d'erreur habituel
+  (« Fichier illisible »), désormais également déclenché dans ces cas.
+- Barre de progression retirée : elle ne reflétait pas d'avancement réel
+  pendant l'appel à Gemini (immobile puis passage direct à 100 %). Le message
+  de statut affiche désormais un chrono qui défile en temps réel
+  (« ... (écoulé : 1 min 23 s) ») pour confirmer que l'application n'est pas
+  figée, et la durée totale de génération une fois la fiche prête
+  (« Terminé en 47 s. »).
+- Les noms de fichiers générés automatiquement (fiche `.distillat.json` et
+  export du document) supprimaient à tort les parenthèses et une partie de la
+  ponctuation courante des titres de livres. Seuls les caractères réellement
+  interdits par Windows sont désormais retirés ; l'export du document utilise
+  maintenant le même filtre que la fiche JSON (il n'en appliquait aucun
+  auparavant, ce qui pouvait faire échouer l'export si le titre contenait un
+  caractère interdit). L'apostrophe typographique (') utilisée par de
+  nombreux titres de livres était elle aussi supprimée à tort ; elle est
+  désormais conservée, comme l'apostrophe droite ('). Un titre se terminant
+  par un point (silencieusement tronqué par Windows) ou correspondant à un
+  nom réservé (`CON`, `NUL`, `COM1`...) retombe sur le nom de fichier par
+  défaut, comme un titre vide.
+- Ajustements ergonomiques divers :
+  - Une fois la fiche générée, l'application affiche désormais l'onglet
+    Couverture au lieu du Résumé court (l'ouverture directe sur le résumé était
+    une erreur).
+  - Positionnement des boutons de gestion de fiche : le bouton d'export du
+    document, initialement à côté du bouton **Résumer**, a été déplacé à côté
+    des boutons de gestion de fiche (**Charger une fiche**, **Sauvegarder la
+    fiche**, **Fermer la fiche**), plus cohérent puisqu'il concerne le résultat
+    et non le déclenchement du résumé. Les 4 boutons ainsi regroupés sont
+    désormais alignés à droite au lieu d'être collés à gauche juste au-dessus
+    des onglets, pour réduire les clics accidentels avec les autres contrôles ;
+    l'ordre des deux derniers boutons a aussi été inversé.
+- L'application plantait en glissant-déposant plusieurs fichiers à la fois
+  dans la zone de dépôt (ex : deux fiches `.distillat.json` sélectionnées
+  ensemble). Le traitement du dépôt ouvrait un dialogue de confirmation en
+  plein milieu du cycle de glisser-déposer natif de Windows, ce qui provoquait
+  le plantage ; ce traitement est désormais différé au tick suivant.
+- Fiabilité de la fiche affichée pendant et après une génération :
+  - Le dialogue de fiche non sauvegardée proposait deux boutons « Yes »/« No »
+    non traduits (dépendants de la traduction Qt du système). Il propose
+    désormais trois choix explicites en français, avec un code couleur :
+    **Oui : perdre les modifications** (rouge), **Non : retour à la fiche**
+    (gris) et **Non : sauvegarder et fermer la fiche** (vert), ce dernier
+    déclenchant directement l'enregistrement sans quitter le dialogue.
+  - La zone de glisser-déposer et le bouton **Charger une fiche** restaient
+    actifs pendant la génération d'un résumé, permettant de sélectionner un
+    autre fichier ou d'ouvrir une autre fiche par inadvertance en pleine
+    requête (dans ce dernier cas, la fiche fraîchement chargée était ensuite
+    écrasée sans confirmation dès que le résumé en cours se terminait). Les
+    deux sont désormais désactivés tant qu'un résumé est en cours (la zone de
+    dépôt avec un message dédié), et se réactivent automatiquement une fois
+    le traitement terminé (succès ou échec).
+  - Après un échec de génération, l'application demandait à tort de
+    sauvegarder une « fiche non sauvegardée » à la fermeture, alors que
+    l'utilisateur n'avait rien édité : le vidage des onglets au lancement
+    d'une génération était compté comme une édition manuelle de la fiche
+    précédente. Choisir « sauvegarder et fermer » dans ce faux dialogue
+    pouvait alors écraser le fichier d'origine de la fiche précédente avec du
+    contenu vide. La fiche précédente est désormais correctement refermée
+    avant le vidage des onglets.
+  - Fermer l'application pendant une génération détruisait le thread de
+    traitement encore actif, avec plantage possible à la sortie. L'application
+    demande désormais confirmation (« Une génération est en cours. Voulez-vous
+    vraiment quitter ? ») et, le cas échéant, interrompt proprement le
+    traitement avant de se fermer.
+- Nouveau bouton **Limites de quota** dans l'en-tête de l'application : permet
+  d'ajuster manuellement les limites RPM/TPM/RPD affichées si Google modifie
+  le palier gratuit, sans avoir à modifier le code ni à recompiler (aucune API
+  ne permettant de les lire automatiquement). Les valeurs personnalisées sont
+  enregistrées dans `%APPDATA%\Distillat\quota_limits.json` ; un problème
+  disque (disque plein, permissions refusées...) lors de leur enregistrement
+  affiche un message d'erreur explicite, comme pour la sauvegarde d'une fiche.
+- Ajustements mineurs :
+  - Les tirets cadratin (—) et demi-cadratin (–) que Gemini peut produire dans
+    ses réponses sont désormais systématiquement remplacés par un tiret simple
+    avant d'être affichés, dans les résumés, l'analyse et les fiches de
+    personnages/groupes.
+  - Retrait des points de suspension superflus sur les libellés de quelques
+    boutons.
+
+## [1.0.0] - 2026-07-18 - Première version
 
 - Génération d'une fiche de lecture complète à partir d'un livre `.epub` ou
   `.pdf`, via l'API Gemini (gratuite) : résumé court, résumé détaillé,
