@@ -12,7 +12,11 @@ prêts à consulter ou à exporter en PDF.
 
 L'application s'appuie sur le palier gratuit de Gemini 3.5 Flash.
 
-**Version 1.0.1**
+**Téléchargement** : dernière version sur la page
+[Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
+`.zip` à télécharger se trouve tout en bas de la page de la release).
+
+**Version 1.1.0**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, en
