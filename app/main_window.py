@@ -1,6 +1,7 @@
 """Fenêtre principale de l'application Distillat."""
 import os
 import re
+import webbrowser
 from pathlib import Path
 
 from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
@@ -34,8 +35,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from app import config
+from app import config, generation_resume
 from app.__version__ import VERSION
+from app.update_checker import check_for_updates_on_startup, releases_page_url
 from app.book_report import BookReport, Character, sanitize_filename
 from app.gemini_client import DEFAULT_PROMPT_TEMPLATES, MODEL_NAME
 from app.pdf_export import export_book_report_to_pdf
@@ -591,12 +593,6 @@ class MainWindow(QMainWindow):
             settings_dir=config.get_settings_dir(),
         )
 
-        self._retry_seconds_left = 0
-        self._retry_quota_id = ""
-        self._retry_timer = QTimer(self)
-        self._retry_timer.setInterval(1000)
-        self._retry_timer.timeout.connect(self._on_retry_tick)
-
         self._elapsed_seconds = 0
         self._last_progress_message = ""
         self._elapsed_timer = QTimer(self)
@@ -618,6 +614,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._update_quota_display(self.quota_tracker.snapshot())
         self._ensure_api_key(prompt_if_missing=False)
+        check_for_updates_on_startup(self)
 
     def _size_to_available_screen(self) -> None:
         target_width, target_height = 820, 950
@@ -658,6 +655,18 @@ class MainWindow(QMainWindow):
         self.api_key_button.clicked.connect(self._on_edit_api_key)
         header.addWidget(self.api_key_button)
         layout.addLayout(header)
+
+        # Discret et masqué par défaut : n'apparaît que si une vérification
+        # au démarrage détecte réellement une version plus récente sur
+        # GitHub Releases (silencieux en cas d'erreur réseau ou si à jour).
+        self.update_banner_label = QLabel("")
+        self.update_banner_label.setStyleSheet("color: #1a6b1a; font-size: 12px;")
+        self.update_banner_label.setWordWrap(True)
+        self.update_banner_label.setTextFormat(Qt.RichText)
+        self.update_banner_label.setAlignment(Qt.AlignCenter)
+        self.update_banner_label.linkActivated.connect(self._on_open_releases_page)
+        self.update_banner_label.hide()
+        layout.addWidget(self.update_banner_label)
 
         self.drop_zone = DropZone(
             on_file_dropped=self._on_file_selected,
@@ -1012,6 +1021,16 @@ class MainWindow(QMainWindow):
     def _on_show_license(self) -> None:
         LicenseDialog(self).exec_()
 
+    def show_update_banner(self, latest_version: str) -> None:
+        self.update_banner_label.setText(
+            f'<a href="#">🆕 Une nouvelle version de Distillat est disponible '
+            f"(v{latest_version}), cliquez pour la télécharger</a>"
+        )
+        self.update_banner_label.show()
+
+    def _on_open_releases_page(self) -> None:
+        webbrowser.open(releases_page_url())
+
     def _set_summarize_button_enabled(self, enabled: bool) -> None:
         self.summarize_button.setEnabled(enabled)
         if enabled:
@@ -1196,7 +1215,6 @@ class MainWindow(QMainWindow):
         for signal in (
             self.worker.progress,
             self.worker.quota_updated,
-            self.worker.retry_wait,
             self.worker.finished_ok,
             self.worker.failed,
         ):
@@ -1232,6 +1250,26 @@ class MainWindow(QMainWindow):
         if not api_key:
             return
 
+        resume_state = generation_resume.load_resume_state(config.get_settings_dir())
+        if resume_state is not None and resume_state.book_path == self.selected_book_path:
+            resume_box = QMessageBox(self)
+            resume_box.setIcon(QMessageBox.Question)
+            resume_box.setWindowTitle("Reprendre la génération interrompue ?")
+            resume_box.setText(
+                f"Une génération précédente pour ce livre s'était arrêtée après "
+                f"{resume_state.batches_done}/{resume_state.batches_total} lot(s) de chapitres "
+                f"résumé(s) avec succès.\n\nReprendre à partir de là (recommandé), ou repartir de zéro ?"
+            )
+            resume_button = resume_box.addButton("Reprendre", QMessageBox.AcceptRole)
+            restart_button = resume_box.addButton("Repartir de zéro", QMessageBox.RejectRole)
+            resume_box.setDefaultButton(resume_button)
+            resume_box.exec_()
+            if resume_box.clickedButton() is restart_button:
+                generation_resume.clear_resume_state(config.get_settings_dir())
+                resume_state = None
+        else:
+            resume_state = None
+
         self._set_summarize_button_enabled(False)
         self.save_button.setEnabled(False)
         self.save_report_button.setEnabled(False)
@@ -1263,12 +1301,10 @@ class MainWindow(QMainWindow):
         self._render_status_with_elapsed()
         self._elapsed_timer.start()
 
-        self._retry_timer.stop()
         self.quota_warning_label.hide()
-        self.worker = SummarizeWorker(self.selected_book_path, api_key, self.quota_tracker)
+        self.worker = SummarizeWorker(self.selected_book_path, api_key, self.quota_tracker, resume_state)
         self.worker.progress.connect(self._on_progress)
         self.worker.quota_updated.connect(self._update_quota_display)
-        self.worker.retry_wait.connect(self._on_retry_wait)
         self.worker.finished_ok.connect(self._on_finished_ok)
         self.worker.failed.connect(self._on_failed)
         self.worker.start()
@@ -1291,27 +1327,6 @@ class MainWindow(QMainWindow):
     def _on_progress(self, done: int, total: int, message: str) -> None:
         self._last_progress_message = message
         self._render_status_with_elapsed()
-
-    def _on_retry_wait(self, wait_seconds: float, quota_id: str) -> None:
-        self._retry_seconds_left = max(1, round(wait_seconds))
-        self._retry_quota_id = quota_id
-        self._render_retry_countdown()
-        self._retry_timer.start()
-
-    def _on_retry_tick(self) -> None:
-        self._retry_seconds_left -= 1
-        if self._retry_seconds_left <= 0:
-            self._retry_timer.stop()
-            self.quota_warning_label.hide()
-            return
-        self._render_retry_countdown()
-
-    def _render_retry_countdown(self) -> None:
-        quota_part = f" (quota : {self._retry_quota_id})" if self._retry_quota_id else ""
-        self.quota_warning_label.setText(
-            f"⏳ Quota atteint{quota_part}, nouvelle tentative dans {self._retry_seconds_left}s…"
-        )
-        self.quota_warning_label.show()
 
     QUOTA_WARNING_THRESHOLD = 0.8
 
@@ -1415,7 +1430,6 @@ class MainWindow(QMainWindow):
             self.cover_label.setText("Pas de couverture")
 
     def _on_finished_ok(self, result: BookReport) -> None:
-        self._retry_timer.stop()
         self._elapsed_timer.stop()
         self.last_result = result
         self._last_result_source_stem = (
@@ -1451,7 +1465,6 @@ class MainWindow(QMainWindow):
         self.repaint()
 
     def _on_failed(self, error_message: str) -> None:
-        self._retry_timer.stop()
         self._elapsed_timer.stop()
         duration = self._format_duration(self._elapsed_seconds)
         self.status_label.setStyleSheet("color: #b02a2a; font-weight: bold;")
@@ -1467,14 +1480,51 @@ class MainWindow(QMainWindow):
                 "le quota journalier à minuit)."
             )
             self.quota_warning_label.show()
+        resume_state = generation_resume.load_resume_state(config.get_settings_dir())
+        if resume_state is not None and resume_state.book_path == self.selected_book_path:
+            if "quota journalier" in error_message.lower():
+                wait_hint = (
+                    "C'est le quota JOURNALIER (nombre de requêtes/jour) qui est épuisé : il ne se "
+                    "réinitialise qu'à minuit, il faudra donc attendre demain avant de pouvoir reprendre. "
+                    "Une fois ce délai passé, "
+                )
+            elif "quota" in error_message.lower():
+                wait_hint = (
+                    "C'est le quota PAR MINUTE (requêtes ou tokens/minute) qui est temporairement dépassé : "
+                    "il se libère de lui-même en général en moins de 2 minutes. Une fois ce délai passé, "
+                )
+            else:
+                # Pas un problème de quota (ex : réponse mal formée renvoyée par Gemini,
+                # aléa ponctuel) : aucun délai à attendre, un nouvel essai peut suffire
+                # immédiatement, contrairement aux cas de quota traités ci-dessus.
+                wait_hint = (
+                    "Ce n'est pas un problème de quota : rien à attendre, il s'agit probablement d'un "
+                    "aléa ponctuel de génération. Vous pouvez réessayer tout de suite, "
+                )
+            error_message += (
+                f"\n\nRien n'est perdu : les {resume_state.batches_done}/{resume_state.batches_total} "
+                f"lot(s) de chapitres déjà résumés avec succès ont été sauvegardés. {wait_hint}"
+                "glissez-déposez à nouveau ce même fichier EPUB/PDF et cliquez sur \"Résumer\" : "
+                "Distillat reconnaîtra automatiquement où le traitement s'était arrêté et proposera de "
+                "reprendre exactement à partir de là, sans refaire le travail déjà fait."
+            )
         QMessageBox.critical(self, "Erreur", error_message)
 
     def _default_save_dir(self) -> Path:
-        """Dossier proposé par défaut à l'enregistrement : celui d'où provient
-        la fiche affichée si elle a été chargée, sinon Documents\\Distillat\\Fiches."""
+        """Dossier proposé par défaut à l'enregistrement d'une fiche : celui
+        d'où provient la fiche affichée si elle a été chargée, sinon le
+        dernier dossier utilisé pour une fiche, sinon Documents\\Distillat\\Fiches."""
         if self._last_report_source_path is not None:
             return self._last_report_source_path.parent
-        return config.get_reports_dir()
+        return config.load_last_report_dir() or config.get_reports_dir()
+
+    def _default_pdf_dir(self) -> Path:
+        """Dossier proposé par défaut à l'export PDF : celui d'où provient la
+        fiche affichée si elle a été chargée, sinon le dernier dossier utilisé
+        pour un export PDF, sinon Documents\\Distillat\\Fiches."""
+        if self._last_report_source_path is not None:
+            return self._last_report_source_path.parent
+        return config.load_last_pdf_dir() or config.get_reports_dir()
 
     def _on_save_clicked(self) -> None:
         if not self.last_result:
@@ -1482,7 +1532,7 @@ class MainWindow(QMainWindow):
         self._sync_edits_to_last_result()
 
         base_name = self._last_result_source_stem or self.last_result.book_title
-        default_path = str(self._default_save_dir() / f"{sanitize_filename(base_name)}.pdf")
+        default_path = str(self._default_pdf_dir() / f"{sanitize_filename(base_name)}.pdf")
         path, _ = QFileDialog.getSaveFileName(
             self, "Enregistrer le résumé", default_path, "Documents PDF (*.pdf)"
         )
@@ -1493,6 +1543,7 @@ class MainWindow(QMainWindow):
 
         try:
             export_book_report_to_pdf(self.last_result, path)
+            config.save_last_pdf_dir(Path(path).parent)
             QMessageBox.information(self, "Sauvegarde réussie", f"Document enregistré :\n{path}")
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Erreur de sauvegarde", str(exc))
@@ -1549,6 +1600,7 @@ class MainWindow(QMainWindow):
             self._report_dirty = False
             self._last_report_source_path = target
             self._last_result_source_stem = target.stem.removesuffix(".distillat")
+            config.save_last_report_dir(target.parent)
             if overwrites_source:
                 QMessageBox.information(
                     self, "Sauvegarde réussie", "La fiche a été correctement modifiée."
@@ -1563,8 +1615,9 @@ class MainWindow(QMainWindow):
     def _on_load_report_clicked(self) -> None:
         if not self._confirm_discard_unsaved_report():
             return
+        default_dir = config.load_last_report_dir() or config.get_reports_dir()
         path, _ = QFileDialog.getOpenFileName(
-            self, "Charger une fiche", str(config.get_reports_dir()), "Fiches Distillat (*.json)"
+            self, "Charger une fiche", str(default_dir), "Fiches Distillat (*.json)"
         )
         if not path:
             return
@@ -1591,6 +1644,7 @@ class MainWindow(QMainWindow):
         self._last_result_source_stem = Path(path).stem.removesuffix(".distillat")
         self._last_report_source_path = Path(path)
         self._report_dirty = False
+        config.save_last_report_dir(self._last_report_source_path.parent)
         self._display_book_report(result)
         self.status_label.setText(f"Fiche chargée depuis {os.path.basename(path)}.")
         self.extra_text_label.hide()

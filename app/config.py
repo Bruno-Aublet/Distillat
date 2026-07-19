@@ -3,6 +3,7 @@ d'identification Windows, par le module keyring - jamais en clair sur disque),
 et des emplacements de stockage persistants (indépendants du dossier de
 l'application, pour ne pas perdre ces données si l'utilisateur
 supprime/remplace le dossier de l'exe)."""
+import json
 import os
 import shutil
 import sys
@@ -14,6 +15,7 @@ from keyring.errors import KeyringError
 APP_FOLDER_NAME = "Distillat"
 KEYRING_SERVICE_NAME = "Distillat"
 KEYRING_USERNAME = "gemini_api_key"
+_LAST_DIRS_FILENAME = "last_dirs.json"
 
 
 def get_app_dir() -> Path:
@@ -59,6 +61,52 @@ def get_reports_dir() -> Path:
     reports_dir = Path.home() / "Documents" / APP_FOLDER_NAME / "Fiches"
     reports_dir.mkdir(parents=True, exist_ok=True)
     return reports_dir
+
+
+def load_last_report_dir() -> Path | None:
+    """Dernier dossier utilisé pour sauvegarder/charger une fiche
+    (.distillat.json), ou None si aucun n'a encore été mémorisé ou si le
+    dossier mémorisé n'existe plus."""
+    return _load_last_dir("report_dir")
+
+
+def save_last_report_dir(directory: Path) -> None:
+    _save_last_dir("report_dir", directory)
+
+
+def load_last_pdf_dir() -> Path | None:
+    """Dernier dossier utilisé pour exporter un PDF, ou None si aucun n'a
+    encore été mémorisé ou si le dossier mémorisé n'existe plus."""
+    return _load_last_dir("pdf_dir")
+
+
+def save_last_pdf_dir(directory: Path) -> None:
+    _save_last_dir("pdf_dir", directory)
+
+
+def _load_last_dir(key: str) -> Path | None:
+    last_dirs_path = get_settings_dir() / _LAST_DIRS_FILENAME
+    if not last_dirs_path.exists():
+        return None
+    try:
+        data = json.loads(last_dirs_path.read_text(encoding="utf-8"))
+        value = data[key]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    directory = Path(value)
+    return directory if directory.is_dir() else None
+
+
+def _save_last_dir(key: str, directory: Path) -> None:
+    last_dirs_path = get_settings_dir() / _LAST_DIRS_FILENAME
+    data = {}
+    if last_dirs_path.exists():
+        try:
+            data = json.loads(last_dirs_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+    data[key] = str(directory)
+    last_dirs_path.write_text(json.dumps(data), encoding="utf-8")
 
 
 def migrate_legacy_files() -> None:

@@ -16,7 +16,7 @@ L'application s'appuie sur le palier gratuit de Gemini 3.5 Flash.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.1.0**
+**Version 1.1.1**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, en
@@ -26,6 +26,13 @@ Le numéro de version s'affiche dans le titre de la fenêtre et dans les
 propriétés Windows de l'exécutable (clic droit sur `Distillat.exe` >
 Propriétés > Détails). Source unique de vérité : `app/__version__.py`
 (synchronisé manuellement avec `version_info.txt` pour les métadonnées .exe).
+
+À chaque lancement, l'application vérifie silencieusement en arrière-plan si
+une version plus récente est disponible sur la page
+[Releases](https://github.com/Bruno-Aublet/Distillat/releases) : en cas
+d'erreur réseau ou si l'application est déjà à jour, rien ne s'affiche ; si
+une mise à jour existe, un bandeau apparaît sous l'en-tête avec un lien direct
+vers la page de téléchargement.
 
 ## Fiche d'exemple
 
@@ -58,16 +65,20 @@ ou en ligne : ne le trouverez pas, il n'a jamais existé.
    durée du traitement, pour éviter de sélectionner un autre fichier ou
    d'ouvrir une autre fiche par-dessus le résumé en cours.
 3. L'application compte les tokens du texte extrait via l'API Gemini :
-   - si le livre tient dans une seule requête, les deux résumés, les
-     personnages principaux et l'analyse littéraire sont générés en un seul
-     appel ;
+   - si le texte tient sous la limite de débit du palier gratuit (tokens par
+     minute), les deux résumés, les personnages principaux et l'analyse
+     littéraire sont générés en un seul appel ;
    - sinon (livre volumineux), le texte est découpé en lots de plusieurs
      chapitres consécutifs (table des matières de l'EPUB, ou blocs de pages
-     pour un PDF ; le plus de chapitres possible par lot selon la taille du
-     livre, pour limiter le nombre de requêtes), chaque lot est résumé en un
-     appel, puis un dernier appel reçoit l'ensemble de ces résumés et produit
-     en une seule fois les deux résumés finaux, les personnages principaux et
-     l'analyse littéraire.
+     pour un PDF ; le plus de chapitres possible par lot sans dépasser cette
+     même limite de débit, pour limiter le nombre de requêtes), chaque lot
+     est résumé en un appel, puis un dernier appel reçoit l'ensemble de ces
+     résumés et produit en une seule fois les deux résumés finaux, les
+     personnages principaux et l'analyse littéraire. Si un échec survient en
+     cours de route (quota atteint, réponse Gemini illisible...), les lots
+     déjà résumés avec succès sont conservés : redéposer le même fichier et
+     cliquer de nouveau sur **Résumer** propose de reprendre exactement là où
+     le traitement s'était arrêté, sans reformuler ce qui a déjà été obtenu.
 4. Le résultat (toujours en français, quelle que soit la langue du livre)
    s'affiche dans 5 onglets : **Couverture** (image, titre, auteur),
    **Résumé court** (deux à trois paragraphes maximum), **Résumé
@@ -133,11 +144,13 @@ découpé par chapitres - comptez large.
 
 L'application affiche en temps réel une estimation de la consommation
 (tokens entrée/sortie, requêtes et tokens par minute, requêtes par jour), avec
-un avertissement dès 80 % d'une limite atteinte, et une alerte avec compte à
-rebours en cas de quota effectivement dépassé. Ce suivi est **local à
-l'application** : il ne reflète pas l'usage réel si la même clé API est
-utilisée ailleurs en parallèle (un autre outil, un test manuel via AI
-Studio...), auquel cas les compteurs affichés ne seront plus fiables.
+un avertissement dès 80 % d'une limite atteinte. En cas de quota effectivement
+dépassé, la génération échoue immédiatement avec un message clair (aucune
+nouvelle tentative automatique) ; il suffit de recliquer sur **Résumer** une
+fois le quota libéré. Ce suivi est **local à l'application** : il ne reflète
+pas l'usage réel si la même clé API est utilisée ailleurs en parallèle (un
+autre outil, un test manuel via AI Studio...), auquel cas les compteurs
+affichés ne seront plus fiables.
 
 ## Installation (développement)
 
@@ -194,23 +207,29 @@ lors d'une mise à jour) :
   [Sécurité de la clé API](#sécurité-de-la-clé-api)).
 - **`.quota_state.json`** (compteur de requêtes du jour), **`quota_limits.json`**
   (limites RPM/TPM/RPD personnalisées, si modifiées via le bouton **Limites de
-  quota**) et **`prompts.json`** (prompts personnalisés, si modifiés via le
-  bouton **Prompts** ; absent tant qu'aucun prompt n'a été modifié) :
+  quota**), **`prompts.json`** (prompts personnalisés, si modifiés via le
+  bouton **Prompts** ; absent tant qu'aucun prompt n'a été modifié),
+  **`.generation_resume.json`** (lots de chapitres déjà résumés pour une
+  génération interrompue par un échec ; absent en l'absence d'échec, supprimé
+  dès qu'une génération se termine avec succès) et **`last_dirs.json`**
+  (derniers dossiers utilisés pour une fiche et pour un export PDF, voir
+  ci-dessous ; absent tant qu'aucune sauvegarde/chargement n'a été fait) :
   `%APPDATA%\Distillat\`.
 - **Fiches sauvegardées** (`.distillat.json`) et **exports PDF** :
-  `Documents\Distillat\Fiches\`, proposé par défaut par
-  **Sauvegarder la fiche…**, **Sauvegarder en .pdf** et
-  **Charger une fiche…** (un autre emplacement peut toujours être choisi ; les
-  sous-dossiers y sont sans problème). Si la fiche affichée a été chargée
-  depuis un fichier, c'est son dossier d'origine qui est proposé à la place,
-  avec son nom de fichier ; la réenregistrer sur son fichier d'origine ne
-  demande aucune confirmation de remplacement (un message confirme simplement
-  la modification). La couverture est automatiquement
-  redimensionnée et recompressée avant d'être stockée dans la fiche ou le
-  document PDF, pour éviter qu'une image haute résolution alourdisse
-  inutilement le fichier ; une fiche existante contenant encore une
-  couverture surdimensionnée (créée par une version antérieure) est allégée
-  automatiquement dès son prochain chargement.
+  `Documents\Distillat\Fiches\` au tout premier usage, puis le dernier dossier
+  utilisé pour ce type de fichier (fiche ou PDF, mémorisés séparément) est
+  proposé par défaut par **Sauvegarder la fiche…**, **Sauvegarder en .pdf** et
+  **Charger une fiche…**, y compris après redémarrage de l'application (un
+  autre emplacement peut toujours être choisi ; les sous-dossiers y sont sans
+  problème). Si la fiche affichée a été chargée depuis un fichier, c'est son
+  dossier d'origine qui est proposé en priorité, avec son nom de fichier ; la
+  réenregistrer sur son fichier d'origine ne demande aucune confirmation de
+  remplacement (un message confirme simplement la modification). La
+  couverture est automatiquement redimensionnée et recompressée avant d'être
+  stockée dans la fiche ou le document PDF, pour éviter qu'une image haute
+  résolution alourdisse inutilement le fichier ; une fiche existante
+  contenant encore une couverture surdimensionnée (créée par une version
+  antérieure) est allégée automatiquement dès son prochain chargement.
 - **`LICENSE`** et **icône de l'application** (`icons/open-book_4681875.png`) :
   embarqués à la compilation (dans `_internal/`). Le `LICENSE` est accessible
   depuis le footer de l'application (« Copyright ... - Licence GNU GPL v3 »).
@@ -218,7 +237,8 @@ lors d'une mise à jour) :
 En développement (`python main.py`), la clé API (keyring) et le dossier des
 fiches (`Documents\Distillat\Fiches\`) sont les mêmes qu'en mode compilé ;
 seuls les fichiers techniques (`.quota_state.json`, `quota_limits.json`,
-`prompts.json`) restent à la racine du projet au lieu de `%APPDATA%\Distillat\`. Le dossier
+`prompts.json`, `.generation_resume.json`) restent à la racine du projet au
+lieu de `%APPDATA%\Distillat\`. Le dossier
 `Fiches/` à la racine du projet ne sert qu'à héberger la fiche d'exemple
 fournie avec le code.
 

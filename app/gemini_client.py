@@ -1,6 +1,5 @@
 """Client Gemini : comptage de tokens, résumé/personnages/analyse, avec retry."""
 import json
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,16 +29,42 @@ MODEL_NAME = "gemini-3.5-flash"
 # pour laisser de la place au prompt système et à la réponse.
 MAX_INPUT_TOKENS = 900_000
 
-MAX_RETRIES = 5
-INITIAL_BACKOFF_SECONDS = 5
+# Limite de débit du palier gratuit (tokens par minute), constatée sur
+# https://aistudio.google.com/rate-limit pour gemini-3.5-flash (250 000 au
+# 19/07/2026, cf. app/quota_tracker.py). C'est elle, et non MAX_INPUT_TOKENS
+# (la fenêtre de contexte du modèle, bien plus large), qui doit dimensionner
+# une requête envoyée en une fois : une requête de plusieurs centaines de
+# milliers de tokens tient dans le modèle mais sature le TPM à elle seule et
+# déclenche une erreur 429, même si c'est la toute première requête envoyée.
+# Marge de sécurité sous la vraie limite (250 000) pour absorber l'écart
+# entre le tokenizer local (count_tokens) et le décompte serveur exact.
+MAX_TOKENS_PER_REQUEST = 200_000
 
 ProgressCallback = Callable[[int, int, str], None]
 QuotaCallback = Callable[[QuotaSnapshot], None]
-RetryWaitCallback = Callable[[float, str], None]  # secondes d'attente, nom du quota (ou "")
 
 
 class GeminiError(Exception):
     pass
+
+
+class PartialGenerationError(GeminiError):
+    """Levée quand un livre découpé en lots échoue après que d'autres lots ont
+    déjà été résumés avec succès : porte ce travail déjà accompli pour que
+    l'appelant puisse le sauvegarder et proposer une reprise plutôt que de
+    tout perdre."""
+
+    def __init__(
+        self,
+        message: str,
+        chapter_summaries: list[tuple[str, str]],
+        batches_done: int,
+        batches_total: int,
+    ) -> None:
+        super().__init__(message)
+        self.chapter_summaries = chapter_summaries
+        self.batches_done = batches_done
+        self.batches_total = batches_total
 
 
 @dataclass
@@ -90,22 +115,23 @@ def _friendly_error_message(exc: Exception) -> str:
             )
         return (
             "Le quota Gemini (requêtes ou tokens par minute) est temporairement dépassé. "
-            "Nouvelle tentative automatique en cours. (erreur 429 : quota par minute dépassé)"
+            "Réessayez dans quelques instants en cliquant à nouveau sur Résumer. "
+            "(erreur 429 : quota par minute dépassé)"
         )
     if isinstance(exc, ServiceUnavailable):
         return (
             "Le service Gemini est temporairement indisponible. "
-            "Nouvelle tentative automatique en cours. (erreur 503)"
+            "Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 503)"
         )
     if isinstance(exc, InternalServerError):
         return (
             "Le service Gemini a rencontré une erreur interne. "
-            "Nouvelle tentative automatique en cours. (erreur 500)"
+            "Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 500)"
         )
     if isinstance(exc, DeadlineExceeded):
         return (
             "Le service Gemini a mis trop de temps à répondre. "
-            "Nouvelle tentative automatique en cours. (erreur 504)"
+            "Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 504)"
         )
     if isinstance(exc, (PermissionDenied, Unauthenticated)):
         return (
@@ -144,18 +170,20 @@ def count_tokens(text: str) -> int:
 
 def _split_chapters_into_batches(chapters: list[Chapter]) -> list[list[Chapter]]:
     """Regroupe les chapitres en lots dont le texte cumulé tient sous
-    MAX_INPUT_TOKENS, pour un livre si volumineux que même le texte intégral
-    dépasse la fenêtre de contexte du modèle (cas rare, un roman très long).
-    Un chapitre dont le texte dépasse à lui seul MAX_INPUT_TOKENS forme son
-    propre lot (l'appel Gemini correspondant échouera probablement, mais ce
-    n'est pas à cette fonction de tronquer le contenu du livre)."""
+    MAX_TOKENS_PER_REQUEST, la limite de débit par minute du palier gratuit
+    (et non MAX_INPUT_TOKENS, la fenêtre de contexte du modèle, bien plus
+    large - un lot dimensionné sur cette dernière saturerait le quota TPM à
+    lui seul). Un chapitre dont le texte dépasse à lui seul
+    MAX_TOKENS_PER_REQUEST forme son propre lot (l'appel Gemini correspondant
+    échouera probablement, mais ce n'est pas à cette fonction de tronquer le
+    contenu du livre)."""
     batches: list[list[Chapter]] = []
     current_batch: list[Chapter] = []
     current_tokens = 0
 
     for chapter in chapters:
         chapter_tokens = count_tokens(chapter.text)
-        if current_batch and current_tokens + chapter_tokens > MAX_INPUT_TOKENS:
+        if current_batch and current_tokens + chapter_tokens > MAX_TOKENS_PER_REQUEST:
             batches.append(current_batch)
             current_batch = []
             current_tokens = 0
@@ -168,72 +196,42 @@ def _split_chapters_into_batches(chapters: list[Chapter]) -> list[list[Chapter]]
     return batches
 
 
-def _call_with_retry(
+def _call_gemini(
     model: genai.GenerativeModel,
     prompt: str,
     quota_tracker: QuotaTracker,
-    on_retry: Callable[[int, float, QuotaBlockedInfo | None], None] | None = None,
     on_quota_update: QuotaCallback | None = None,
 ) -> str:
-    backoff = INITIAL_BACKOFF_SECONDS
-    last_error: Exception | None = None
-
-    for attempt in range(1, MAX_RETRIES + 1):
+    """Effectue un seul appel à l'API Gemini, sans retry automatique : toute
+    erreur (quota, service indisponible...) remonte immédiatement sous forme
+    de GeminiError avec un message clair, laissant à l'utilisateur le choix
+    de relancer la génération en recliquant sur Résumer."""
+    try:
+        response = model.generate_content(prompt)
+        usage = response.usage_metadata
+        snapshot = quota_tracker.record_call(
+            input_tokens=usage.prompt_token_count,
+            output_tokens=usage.candidates_token_count,
+        )
+        if on_quota_update:
+            on_quota_update(snapshot)
         try:
-            response = model.generate_content(prompt)
-            usage = response.usage_metadata
-            snapshot = quota_tracker.record_call(
-                input_tokens=usage.prompt_token_count,
-                output_tokens=usage.candidates_token_count,
-            )
-            if on_quota_update:
-                on_quota_update(snapshot)
-            try:
-                text = response.text
-            except ValueError as exc:
-                # Levée par la bibliothèque quand aucun candidat exploitable
-                # n'est retourné, notamment si les filtres de sécurité de
-                # Gemini ont bloqué la réponse : sans ce cas, l'utilisateur
-                # voyait un message technique brut au lieu d'une explication.
-                raise GeminiError(
-                    "Gemini n'a pas produit de réponse exploitable, probablement bloquée par ses "
-                    "filtres de sécurité (contenu du livre jugé sensible). Nouvelle tentative "
-                    "impossible pour cette requête."
-                ) from exc
-            if not text:
-                raise GeminiError("Réponse vide reçue de l'API Gemini.")
-            return text
-        except ResourceExhausted as exc:
-            blocked_info = _extract_quota_blocked_info(exc)
-            if _is_daily_quota(blocked_info.quota_id):
-                # Un quota journalier ne se libère qu'à minuit : retenter dans
-                # la minute qui suit ne peut qu'échouer, autant s'arrêter
-                # immédiatement plutôt que de gaspiller MAX_RETRIES tentatives.
-                raise GeminiError(_friendly_error_message(exc)) from exc
-            last_error = exc
-            if attempt == MAX_RETRIES:
-                break
-            if on_retry:
-                wait_seconds = blocked_info.retry_after_seconds or backoff
-                on_retry(attempt, wait_seconds, blocked_info)
-                time.sleep(wait_seconds)
-            else:
-                time.sleep(backoff)
-            backoff *= 2
-        except (ServiceUnavailable, InternalServerError, DeadlineExceeded) as exc:
-            last_error = exc
-            if attempt == MAX_RETRIES:
-                break
-            if on_retry:
-                on_retry(attempt, backoff, None)
-            time.sleep(backoff)
-            backoff *= 2
-        except (PermissionDenied, Unauthenticated) as exc:
-            # Une clé API invalide échouera de la même façon à chaque essai :
-            # inutile de retenter.
-            raise GeminiError(_friendly_error_message(exc)) from exc
-
-    raise GeminiError(_friendly_error_message(last_error))
+            text = response.text
+        except ValueError as exc:
+            # Levée par la bibliothèque quand aucun candidat exploitable
+            # n'est retourné, notamment si les filtres de sécurité de
+            # Gemini ont bloqué la réponse : sans ce cas, l'utilisateur
+            # voyait un message technique brut au lieu d'une explication.
+            raise GeminiError(
+                "Gemini n'a pas produit de réponse exploitable, probablement bloquée par ses "
+                "filtres de sécurité (contenu du livre jugé sensible). Nouvelle tentative "
+                "impossible pour cette requête."
+            ) from exc
+        if not text:
+            raise GeminiError("Réponse vide reçue de l'API Gemini.")
+        return text
+    except (ResourceExhausted, ServiceUnavailable, InternalServerError, DeadlineExceeded, PermissionDenied, Unauthenticated) as exc:
+        raise GeminiError(_friendly_error_message(exc)) from exc
 
 
 DEFAULT_FULL_REPORT_PROMPT = """Tu es un assistant expert en littérature. Voici le texte intégral d'un livre \
@@ -425,7 +423,10 @@ def _chapter_summary_prompt(book_title: str, author: str, batch: list[Chapter], 
 def _consolidation_prompt(
     book_title: str, author: str, chapter_summaries: list[tuple[str, str]], settings_dir: Path | None
 ) -> str:
-    joined = "\n\n".join(f"### {title}\n{summary}" for title, summary in chapter_summaries)
+    # Un chapitre au résumé vide (page sans contenu narratif, voir
+    # _parse_chapter_summaries_batch_json) n'a rien à apporter à la
+    # consolidation : l'inclure enverrait un titre suivi de rien à Gemini.
+    joined = "\n\n".join(f"### {title}\n{summary}" for title, summary in chapter_summaries if summary)
     template = _get_prompt_template("consolidation", settings_dir)
     return _format_prompt_template(
         template,
@@ -523,11 +524,11 @@ def _parse_chapter_summaries_batch_json(raw_text: str, batch: list[Chapter]) -> 
             summary = _normalize_dashes(str(raw_summaries[i].get("summary", "")).strip())
         else:
             summary = ""
-        if not summary:
-            raise GeminiError(
-                f"La réponse de Gemini ne contient pas de résumé exploitable pour le chapitre "
-                f'"{chapter.title}".'
-            )
+        # Un résumé vide est toléré (pas d'erreur) : certains chapitres n'ont
+        # aucun contenu narratif à résumer (page "Du même auteur", mentions
+        # légales...), Gemini renvoie alors légitimement un résumé vide pour
+        # eux plutôt que d'inventer du contenu. Le chapitre est simplement
+        # absent des résumés utiles, sans faire échouer tout le lot.
         summaries.append((chapter.title, summary))
 
     return summaries, leftover
@@ -538,12 +539,18 @@ def generate_book_report(
     quota_tracker: QuotaTracker,
     on_progress: ProgressCallback | None = None,
     on_quota_update: QuotaCallback | None = None,
-    on_retry_wait: RetryWaitCallback | None = None,
     settings_dir: Path | None = None,
+    resume_chapter_summaries: list[tuple[str, str]] | None = None,
+    resume_batches_done: int = 0,
 ) -> BookReport:
     """Génère à la suite le résumé, les fiches personnages et l'analyse littéraire
     du livre. Le résumé est produit directement si le livre tient dans une seule
-    requête, ou par découpage en chapitres puis consolidation sinon."""
+    requête, ou par découpage en chapitres puis consolidation sinon.
+
+    resume_chapter_summaries/resume_batches_done permettent de reprendre une
+    génération en lots interrompue par un échec partiel (voir
+    PartialGenerationError) sans reformuler les lots déjà résumés avec
+    succès : ignorés si le livre tient en une seule requête."""
 
     def report(done: int, total: int, message: str) -> None:
         if on_progress:
@@ -551,24 +558,11 @@ def generate_book_report(
 
     json_model = _get_json_model()
 
-    def retry_notice(attempt: int, wait_seconds: float, blocked_info: QuotaBlockedInfo | None) -> None:
-        quota_id = blocked_info.quota_id if blocked_info and blocked_info.quota_id else ""
-        quota_part = f" (quota : {quota_id})" if quota_id else ""
-        report(
-            0,
-            1,
-            f"Quota atteint{quota_part}, nouvelle tentative dans {wait_seconds:.0f}s "
-            f"(essai {attempt}/{MAX_RETRIES})…",
-        )
-        if on_retry_wait:
-            on_retry_wait(wait_seconds, quota_id)
-
     def call(prompt: str, model: genai.GenerativeModel = json_model) -> str:
-        return _call_with_retry(
+        return _call_gemini(
             model,
             prompt,
             quota_tracker=quota_tracker,
-            on_retry=retry_notice,
             on_quota_update=on_quota_update,
         )
 
@@ -576,10 +570,10 @@ def generate_book_report(
     token_count = count_tokens(content.full_text)
     leftovers: list[str] = []
 
-    if token_count <= MAX_INPUT_TOKENS:
-        # Cas le plus courant : tout tient dans le contexte du modèle, donc les deux
-        # résumés, personnages et analyse sont demandés en une seule requête pour
-        # limiter la consommation de quota (RPM/RPD serrés sur le palier gratuit).
+    if token_count <= MAX_TOKENS_PER_REQUEST:
+        # Cas le plus courant : le texte tient sous la limite de débit par minute
+        # (TPM) du palier gratuit, donc les deux résumés, personnages et analyse
+        # sont demandés en une seule requête pour limiter la consommation de quota.
         report(0, 1, f"Le livre tient en une seule requête ({token_count} tokens). Génération en cours…")
         summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
             call(_full_report_prompt(content, settings_dir))
@@ -606,12 +600,20 @@ def generate_book_report(
             f"de chapitres ({len(content.chapters)} chapitres au total)…",
         )
 
-        chapter_summaries: list[tuple[str, str]] = []
-        for i, batch in enumerate(batches, start=1):
+        chapter_summaries: list[tuple[str, str]] = list(resume_chapter_summaries or [])
+        start_index = min(resume_batches_done, len(batches))
+        for i, batch in enumerate(batches[start_index:], start=start_index + 1):
             report(i - 1, total_steps, f"Résumé du lot de chapitres {i}/{len(batches)}…")
-            batch_summaries, leftover = _parse_chapter_summaries_batch_json(
-                call(_chapter_summary_prompt(content.book_title, content.author, batch, settings_dir)), batch
-            )
+            try:
+                batch_summaries, leftover = _parse_chapter_summaries_batch_json(
+                    call(_chapter_summary_prompt(content.book_title, content.author, batch, settings_dir)), batch
+                )
+            except GeminiError as exc:
+                if chapter_summaries:
+                    raise PartialGenerationError(
+                        str(exc), chapter_summaries, batches_done=i - 1, batches_total=len(batches)
+                    ) from exc
+                raise
             if leftover:
                 leftovers.append(leftover)
             chapter_summaries.extend(batch_summaries)
@@ -622,9 +624,14 @@ def generate_book_report(
             total_steps,
             "Résumés fusionnés. Identification des personnages et rédaction de l'analyse…",
         )
-        summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
-            call(_consolidation_prompt(content.book_title, content.author, chapter_summaries, settings_dir))
-        )
+        try:
+            summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
+                call(_consolidation_prompt(content.book_title, content.author, chapter_summaries, settings_dir))
+            )
+        except GeminiError as exc:
+            raise PartialGenerationError(
+                str(exc), chapter_summaries, batches_done=len(batches), batches_total=len(batches)
+            ) from exc
         if leftover:
             leftovers.append(leftover)
 

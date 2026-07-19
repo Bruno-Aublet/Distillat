@@ -8,4 +8,5 @@ pypdfium2==5.12.1
 pillow==12.3.0
 reportlab==4.5.1
 keyring==25.7.0
+packaging==26.2
 pyinstaller==6.11.1
