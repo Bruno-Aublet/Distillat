@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.cover_image import shrink_cover_image
+from app.i18n import tr
 
 FILE_FORMAT_VERSION = 2
 
@@ -22,9 +23,11 @@ _RESERVED_WINDOWS_NAMES = frozenset(
 )
 
 
-def sanitize_filename(base: str, fallback: str = "livre") -> str:
+def sanitize_filename(base: str, fallback: str | None = None) -> str:
     """Retire d'une chaîne les caractères interdits dans un nom de fichier
     Windows, en conservant la ponctuation courante des titres de livres."""
+    if fallback is None:
+        fallback = tr("book_report.fallback_filename")
     safe_base = "".join(c for c in base if c.isalnum() or c in SAFE_FILENAME_EXTRA_CHARS).strip()
     # Windows tronque silencieusement les points/espaces finaux d'un nom de
     # fichier, et interdit certains noms (CON, NUL, COM1...) quelle que soit

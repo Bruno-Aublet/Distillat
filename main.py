@@ -4,12 +4,13 @@ import sys
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication
 
-from app import config
+from app import config, i18n
 from app.main_window import MainWindow
 
 
 def main() -> None:
     config.migrate_legacy_files()
+    i18n.init_language()
 
     app = QApplication(sys.argv)
     app.setApplicationName("Distillat")

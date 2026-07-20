@@ -1,0 +1,204 @@
+{
+  "book_parsers": {
+    "unknown_title": "Unknown title",
+    "unknown_author": "Unknown author"
+  },
+  "book_report": {
+    "fallback_filename": "book"
+  },
+  "epub_parser": {
+    "fallback_chapter_title": "Chapter {index}",
+    "no_text_extracted": "No text content could be extracted from this EPUB."
+  },
+  "pdf_parser": {
+    "no_text_extracted": "No text could be extracted from this PDF (it may be a scan without OCR).",
+    "page_range_title": "Pages {first_page}-{last_page}",
+    "single_page_title": "Page {page}"
+  },
+  "pdf_export": {
+    "summary_heading": "Short summary",
+    "detailed_summary_heading": "Detailed summary",
+    "characters_heading": "Main characters",
+    "analysis_heading": "Literary analysis"
+  },
+  "gemini_errors": {
+    "daily_quota_exceeded": "The daily Gemini request quota is exhausted for today. It resets at midnight. (error 429: daily quota exceeded)",
+    "rate_quota_exceeded": "The Gemini quota (requests or tokens per minute) is temporarily exceeded. Try again in a few moments by clicking Summarize again. (error 429: per-minute quota exceeded)",
+    "service_unavailable": "The Gemini service is temporarily unavailable. Try again in a few moments by clicking Summarize again. (error 503)",
+    "internal_server_error": "The Gemini service encountered an internal error. Try again in a few moments by clicking Summarize again. (error 500)",
+    "deadline_exceeded": "The Gemini service took too long to respond. Try again in a few moments by clicking Summarize again. (error 504)",
+    "invalid_api_key": "The Gemini API key is invalid, expired, or lacks the necessary permissions. Check it via the API key button. (error 401/403)",
+    "error_code": "error {code}",
+    "generic_api_error": "An error occurred while communicating with the Gemini API{status_part}: {error}",
+    "blocked_by_safety_filters": "Gemini did not produce a usable response, likely blocked by its safety filters (book content flagged as sensitive). A new attempt is not possible for this request.",
+    "empty_response": "Empty response received from the Gemini API.",
+    "invalid_prompt_placeholder": "The custom prompt \"{prompt_label}\" contains an error: the placeholder {error} is not recognized. Check its spelling in the Prompts window (\"Reset this prompt\" button if needed).",
+    "unreadable_response": "Unreadable response from Gemini (unexpected format): {error}",
+    "unexpected_response_shape": "The Gemini response does not have the expected shape (unusable JSON root).",
+    "no_usable_summary": "The Gemini response does not contain a usable summary."
+  },
+  "gemini_progress": {
+    "counting_tokens": "Counting tokens of the extracted text…",
+    "single_request": "The book fits in a single request ({token_count} tokens). Generating…",
+    "book_too_large": "Book too large ({token_count} tokens). Splitting into {batch_count} chapter batch(es) ({chapter_count} chapters in total)…",
+    "summarizing_batch": "Summarizing chapter batch {current}/{total}…",
+    "batch_summarized": "Chapter batch {current}/{total} summarized.",
+    "merging_summaries": "Summaries merged. Identifying characters and writing the analysis…",
+    "done": "Summary, characters, and analysis completed."
+  },
+  "worker_progress": {
+    "reading_file": "Reading file…"
+  },
+  "language_selector": {
+    "label": "Language:",
+    "french": "Français",
+    "english": "English"
+  },
+  "license_dialog": {
+    "window_title": "License",
+    "file_not_found": "License file not found ({license_path}).\n\nThis software is distributed under the GNU GPL v3 license: https://www.gnu.org/licenses/gpl-3.0.txt"
+  },
+  "extra_text_dialog": {
+    "window_title": "Extra content ignored",
+    "explanation": "Gemini produced this text in addition to the content used for the report. It may be a pointless repetition or legitimate content: check it and copy/paste anything you find useful."
+  },
+  "eye_icon": {
+    "tooltip": "Show/hide the key"
+  },
+  "api_key_dialog": {
+    "window_title": "Gemini API key",
+    "info": "Get your free key on <a href=\"https://aistudio.google.com/apikey\">Google AI Studio</a>. It will be stored encrypted via the Windows Credential Manager - do not share it.",
+    "warning": "⚠️ Never click \"Enable billing\": you would lose Gemini's free tier.",
+    "key_placeholder": "AIza...",
+    "key_label": "API key:",
+    "missing_key_title": "Missing API key",
+    "missing_key_message": "Please enter a valid API key.",
+    "save_error_title": "Save error",
+    "save_error_message": "Could not save the API key: the Windows Credential Manager is unavailable."
+  },
+  "quota_limits_dialog": {
+    "window_title": "Gemini quota limits",
+    "model_label": "Model used: <b>{model_name}</b>",
+    "info": "Google does not publish these limits via the API. Check your own limits at <a href=\"https://aistudio.google.com/rate-limit\">aistudio.google.com/rate-limit</a> (for this exact model) and adjust them here if they differ from what's shown in the application.",
+    "rpm_label": "Requests per minute (RPM):",
+    "tpm_label": "Tokens per minute (TPM):",
+    "rpd_label": "Requests per day (RPD):",
+    "save_error_title": "Save error",
+    "save_error_message": "Could not save the quota limits: {error}"
+  },
+  "prompts_dialog": {
+    "window_title": "Gemini prompts",
+    "warning": "⚠️ These prompts directly drive report generation and work as-is. Editing them may cause generation to fail or produce inconsistent results (unusable output, response not recognized by the application, etc.): edit them at your own risk. The portions between curly braces, e.g. {book_title} or {full_text}, are automatically substituted by the application: do not remove them or change their spelling, or you will cause an error.",
+    "reset_button": "Reset this prompt",
+    "save_error_title": "Save error",
+    "save_error_message": "Could not save the prompts: {error}",
+    "tabs": {
+      "full_report": {
+        "title": "Summary + characters + analysis",
+        "explanation": "Most common case: the whole book fits in a single request. This prompt asks in one go for the short summary, the detailed summary, the characters, and the literary analysis."
+      },
+      "chapter_summary": {
+        "title": "1. Summary of a chapter batch",
+        "explanation": "Case of a book too large to fit in a single request: first prompt of the splitting process. The book is split into batches of several consecutive chapters (as many as possible at once depending on the book's size), to limit the number of requests sent to the API (the free daily quota is very tight). This prompt receives one batch and must summarize each chapter of the batch separately."
+      },
+      "consolidation": {
+        "title": "2. Merge summary + characters + analysis",
+        "explanation": "Still in the case of a split book: once every batch has been summarized separately, this prompt receives all the chapter summaries (never the full text) and produces, in a single pass, the short summary, the detailed summary, the characters, and the literary analysis of the whole book."
+      }
+    }
+  },
+  "drop_zone": {
+    "prompt": "Drag and drop an EPUB, PDF file or a .distillat.json report here<br>or click to browse",
+    "busy": "Summarizing...<br>Drag and drop a new file once finished",
+    "file_dialog_title": "Choose an EPUB, PDF file or a report",
+    "file_dialog_filter": "All supported formats (*.epub *.pdf *.distillat.json);;EPUB/PDF files (*.epub *.pdf);;Distillat reports (*.distillat.json)"
+  },
+  "main_window": {
+    "window_title": "Distillat v{version} - Book summaries with Gemini",
+    "title_label": "Distillat",
+    "prompts_button": "Prompts",
+    "quota_limits_button": "Quota limits",
+    "api_key_button": "API key",
+    "output_language_hint": "Reports are generated in English: this setting also determines the language of the summaries produced by Gemini.",
+    "update_banner": "<a href=\"#\">🆕 A new version of Distillat is available (v{version}), click to download it</a>",
+    "no_file_selected": "No file selected",
+    "file_selected": "Selected file: {filename}",
+    "remove_file_button": "✕ Remove",
+    "summarize_button": "Summarize",
+    "extra_text_label": "<a href=\"#\">ℹ️ Extra content generated by Gemini was ignored, click to view it</a>",
+    "quota_disclaimer": "These counters are local estimates for this application only. They will be inaccurate if the same API key is also used elsewhere at the same time.",
+    "load_report_button": "Load a report",
+    "save_report_button": "Save the report",
+    "close_report_button": "Close the report",
+    "export_pdf_button": "Export to .pdf",
+    "footer_button": "Copyright 2026 Bruno Aublet - GNU GPL v3 license",
+    "no_cover": "No cover",
+    "summary_placeholder": "The short summary will appear here after processing.",
+    "detailed_summary_placeholder": "The detailed summary will appear here after processing.",
+    "characters_placeholder": "The main characters will appear here after processing.",
+    "no_characters": "No main character identified.",
+    "analysis_placeholder": "The literary analysis will appear here after processing.",
+    "tab_cover": "Cover",
+    "tab_summary": "Short summary",
+    "tab_detailed_summary": "Detailed summary",
+    "tab_characters": "Characters",
+    "tab_analysis": "Analysis",
+    "no_detailed_summary": "No detailed summary available for this report.",
+    "starting_status": "Starting processing…",
+    "elapsed_suffix": "{message} (elapsed: {elapsed})",
+    "duration_minutes": "{minutes} min {seconds:02d} s",
+    "duration_seconds": "{seconds} s",
+    "quota_display": "Tokens - input: {input_tokens} · output: {output_tokens} · total: {total_tokens}\nRequests/minute: {rpm}/{rpm_limit} · Tokens/minute: {tpm}/{tpm_limit} · Requests/day: {rpd}/{rpd_limit}",
+    "quota_threshold_prefix": "⚠️ Quota almost reached: ",
+    "quota_threshold_rpd": "{used}/{limit} requests used today",
+    "quota_threshold_rpm": "{used}/{limit} requests in the current minute",
+    "quota_threshold_tpm": "{used}/{limit} tokens in the current minute",
+    "mode_split": "Summary consolidated from {chapter_count} chapters.",
+    "mode_single": "Summary produced in a single request.",
+    "finished_status": "Finished in {duration}. {mode}",
+    "failed_status": "Failed after {duration}.",
+    "quota_exceeded_warning": "🚫 Gemini quota exceeded, the app can no longer make requests for now. Try again later (the per-minute quota resets in 60 s, the daily quota at midnight).",
+    "resume_wait_hint_daily": "It's the DAILY quota (number of requests/day) that is exhausted: it only resets at midnight, so you'll need to wait until tomorrow before resuming. Once that time has passed, ",
+    "resume_wait_hint_minute": "It's the PER-MINUTE quota (requests or tokens/minute) that is temporarily exceeded: it generally clears itself in under 2 minutes. Once that time has passed, ",
+    "resume_wait_hint_other": "This isn't a quota issue: there's nothing to wait for, it's probably a one-off generation glitch. You can try again right away, ",
+    "resume_hint_suffix": "\n\nNothing is lost: the {batches_done}/{batches_total} chapter batch(es) already summarized successfully have been saved. {wait_hint}drag and drop this same EPUB/PDF file again and click \"Summarize\": Distillat will automatically recognize where processing had stopped and offer to resume from exactly that point, without redoing work already done.",
+    "error_title": "Error",
+    "save_pdf_dialog_title": "Save the summary",
+    "save_pdf_filter": "PDF documents (*.pdf)",
+    "save_success_title": "Save successful",
+    "pdf_saved_message": "Document saved:\n{path}",
+    "save_error_title": "Save error",
+    "save_report_dialog_title": "Save the report",
+    "save_report_filter": "Distillat reports (*.json)",
+    "existing_file_title": "Existing file",
+    "existing_file_message": "The file already exists:\n{path}\n\nDo you want to replace it?",
+    "yes": "Yes",
+    "no": "No",
+    "report_overwritten_message": "The report was successfully updated.",
+    "report_saved_message": "Report saved:\n{path}",
+    "load_report_dialog_title": "Load a report",
+    "load_report_filter": "Distillat reports (*.json)",
+    "load_error_title": "Loading error",
+    "load_error_message": "Unreadable file: {error}",
+    "report_loaded_status": "Report loaded from {filename}.",
+    "unsaved_report_dialog": {
+      "window_title": "Unsaved report",
+      "text": "The current report has not been saved. Do you want to continue without saving?",
+      "discard_button": "Yes: discard changes",
+      "cancel_button": "No: back to the report",
+      "save_button": "No: save and close the report"
+    },
+    "abort_generation_dialog": {
+      "window_title": "Generation in progress",
+      "text": "A generation is in progress. Do you really want to quit?\nThe report being generated will be lost (Gemini quota already consumed will not be refunded).",
+      "quit_button": "Yes: quit",
+      "stay_button": "No: let the generation finish"
+    },
+    "resume_dialog": {
+      "window_title": "Resume the interrupted generation?",
+      "text": "A previous generation for this book had stopped after {batches_done}/{batches_total} chapter batch(es) successfully summarized.\n\nResume from there (recommended), or start over?",
+      "resume_button": "Resume",
+      "restart_button": "Start over"
+    }
+  }
+}

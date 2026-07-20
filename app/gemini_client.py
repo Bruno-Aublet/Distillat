@@ -2,7 +2,6 @@
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 
 import google.generativeai as genai
 from google.api_core.exceptions import (
@@ -15,8 +14,10 @@ from google.api_core.exceptions import (
     Unauthenticated,
 )
 
+from app import i18n
 from app.book_report import BookReport, Character
 from app.epub_parser import Chapter, BookContent
+from app.i18n import tr
 from app.prompts_store import load_custom_prompts
 from app.quota_tracker import QuotaSnapshot, QuotaTracker
 
@@ -45,7 +46,15 @@ QuotaCallback = Callable[[QuotaSnapshot], None]
 
 
 class GeminiError(Exception):
-    pass
+    """error_kind identifie la nature de l'erreur indépendamment de la langue
+    du message ("daily_quota", "rate_quota", ou None pour tout autre cas) :
+    l'appelant (main_window) s'appuie dessus pour adapter son comportement
+    (ex : proposer une reprise), sans jamais chercher un mot-clé dans le
+    message traduit, ce qui casserait selon la langue de l'UI."""
+
+    def __init__(self, message: str, error_kind: str | None = None) -> None:
+        super().__init__(message)
+        self.error_kind = error_kind
 
 
 class PartialGenerationError(GeminiError):
@@ -60,8 +69,9 @@ class PartialGenerationError(GeminiError):
         chapter_summaries: list[tuple[str, str]],
         batches_done: int,
         batches_total: int,
+        error_kind: str | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__(message, error_kind=error_kind)
         self.chapter_summaries = chapter_summaries
         self.batches_done = batches_done
         self.batches_total = batches_total
@@ -102,45 +112,30 @@ def _http_status(exc: GoogleAPIError) -> int | None:
     return getattr(exc, "code", None) or getattr(exc, "grpc_status_code", None)
 
 
-def _friendly_error_message(exc: Exception) -> str:
+def _friendly_error_message(exc: Exception) -> tuple[str, str | None]:
     """Traduit une exception technique de l'API Gemini en message compréhensible
-    en français, avec le code d'erreur d'origine entre parenthèses pour le
-    diagnostic (support, recherche en ligne...)."""
+    dans la langue actuellement choisie par l'utilisateur, avec le code d'erreur
+    d'origine entre parenthèses pour le diagnostic (support, recherche en
+    ligne...). Retourne aussi error_kind ("daily_quota"/"rate_quota"/None),
+    indépendant de la langue du message : c'est sur cette valeur, et non sur le
+    texte traduit, que l'appelant (main_window) doit se baser pour adapter son
+    comportement (ex : proposer une reprise)."""
     if isinstance(exc, ResourceExhausted):
         blocked_info = _extract_quota_blocked_info(exc)
         if _is_daily_quota(blocked_info.quota_id):
-            return (
-                "Le quota journalier de requêtes Gemini est épuisé pour aujourd'hui. "
-                "Il se réinitialise à minuit. (erreur 429 : quota journalier dépassé)"
-            )
-        return (
-            "Le quota Gemini (requêtes ou tokens par minute) est temporairement dépassé. "
-            "Réessayez dans quelques instants en cliquant à nouveau sur Résumer. "
-            "(erreur 429 : quota par minute dépassé)"
-        )
+            return tr("gemini_errors.daily_quota_exceeded"), "daily_quota"
+        return tr("gemini_errors.rate_quota_exceeded"), "rate_quota"
     if isinstance(exc, ServiceUnavailable):
-        return (
-            "Le service Gemini est temporairement indisponible. "
-            "Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 503)"
-        )
+        return tr("gemini_errors.service_unavailable"), None
     if isinstance(exc, InternalServerError):
-        return (
-            "Le service Gemini a rencontré une erreur interne. "
-            "Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 500)"
-        )
+        return tr("gemini_errors.internal_server_error"), None
     if isinstance(exc, DeadlineExceeded):
-        return (
-            "Le service Gemini a mis trop de temps à répondre. "
-            "Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 504)"
-        )
+        return tr("gemini_errors.deadline_exceeded"), None
     if isinstance(exc, (PermissionDenied, Unauthenticated)):
-        return (
-            "La clé API Gemini est invalide, expirée ou ne dispose pas des autorisations "
-            "nécessaires. Vérifiez-la via le bouton Clé API. (erreur 401/403)"
-        )
+        return tr("gemini_errors.invalid_api_key"), None
     status = _http_status(exc) if isinstance(exc, GoogleAPIError) else None
-    status_part = f" (erreur {status})" if status else ""
-    return f"Une erreur est survenue lors de la communication avec l'API Gemini{status_part} : {exc}"
+    status_part = f" ({tr('gemini_errors.error_code', code=status)})" if status else ""
+    return tr("gemini_errors.generic_api_error", status_part=status_part, error=exc), None
 
 
 def configure(api_key: str) -> None:
@@ -222,16 +217,13 @@ def _call_gemini(
             # n'est retourné, notamment si les filtres de sécurité de
             # Gemini ont bloqué la réponse : sans ce cas, l'utilisateur
             # voyait un message technique brut au lieu d'une explication.
-            raise GeminiError(
-                "Gemini n'a pas produit de réponse exploitable, probablement bloquée par ses "
-                "filtres de sécurité (contenu du livre jugé sensible). Nouvelle tentative "
-                "impossible pour cette requête."
-            ) from exc
+            raise GeminiError(tr("gemini_errors.blocked_by_safety_filters")) from exc
         if not text:
-            raise GeminiError("Réponse vide reçue de l'API Gemini.")
+            raise GeminiError(tr("gemini_errors.empty_response"))
         return text
     except (ResourceExhausted, ServiceUnavailable, InternalServerError, DeadlineExceeded, PermissionDenied, Unauthenticated) as exc:
-        raise GeminiError(_friendly_error_message(exc)) from exc
+        message, error_kind = _friendly_error_message(exc)
+        raise GeminiError(message, error_kind=error_kind) from exc
 
 
 DEFAULT_FULL_REPORT_PROMPT = """Tu es un assistant expert en littérature. Voici le texte intégral d'un livre \
@@ -356,21 +348,159 @@ markdown, au format exact :
 Réponds uniquement avec l'objet JSON."""
 
 
-DEFAULT_PROMPT_TEMPLATES = {
+DEFAULT_FULL_REPORT_PROMPT_EN = """You are an expert literary assistant. Here is the full text of a book \
+titled "{book_title}" by {author}.
+
+Produce ALWAYS IN ENGLISH, regardless of the original language of the text, the following four \
+elements:
+
+1. A SHORT SUMMARY (two to three paragraphs maximum, no more) giving a concise overview of the plot \
+or subject, from beginning to end.
+2. A DETAILED SUMMARY, substantial and developed (at least 1500 words, and considerably more - \
+2500 to 4000 words - for a long novel with a rich plot), that follows the structure of the book \
+(one section per part or group of chapters where relevant) and covers, for each section: the key \
+events, the twists, the memorable dialogue or moments, and the characters' development. Do not \
+settle for a telegraphic list of facts: develop each section with several fluid, concrete sentences, \
+as a reader would when recounting the book in detail to a friend. Each section heading must stand \
+alone on its own line and start with "## " (for example "## Part 1: ..."), or "### " for a \
+subheading; do not use any other Markdown formatting in the text.
+3. The list of MAIN CHARACTERS AND ENTITIES: individual characters who appear across multiple \
+chapters or scenes AND have a direct impact on the plot (through their decisions, actions, or \
+relationships with the protagonist), as well as groups or organizations central to the plot \
+(faction, council, army, family, secret society...) whenever they act as a fully-fledged actor in \
+the story. Ignore characters or groups who appear only once or who do not influence the course of \
+the story. Aim typically for between 3 and 20 entries depending on how rich the novel is (fewer for \
+a short text or one centered on few characters, more for a sprawling ensemble saga) - never invent \
+an entry to reach this number. For each character, write a description covering their role, \
+personality, and development; for each group or organization, describe instead its role in the \
+plot, its goals, and its influence on events.
+4. A literary ANALYSIS of at least 600 to 900 words, structured in several distinct paragraphs \
+covering the main themes, the writing style and narrative construction, then the work's significance \
+- developed and well-argued, without repeating content already covered by the summaries.
+
+Respond STRICTLY with a valid JSON object, with no text whatsoever before or after, no markdown \
+fences, in the exact format:
+{{
+  "summary": "The short summary here, in English...",
+  "detailed_summary": "The detailed, developed summary here, in English...",
+  "characters": [{{"name": "Name", "description": "Description in English..."}}, ...],
+  "analysis": "The literary analysis here, in English..."
+}}
+
+Book text:
+---
+{full_text}
+---
+
+Respond only with the JSON object."""
+
+
+DEFAULT_CHAPTER_SUMMARY_PROMPT_EN = """You are summarizing chapters of the book "{book_title}" by {author}.
+
+Here is a batch of consecutive chapters from this book, each preceded by its exact title between \
+[[[TITLE: ...]]] tags. Summarize EACH chapter SEPARATELY, ALWAYS IN ENGLISH regardless of the \
+language of the source text. For each chapter, stay faithful to the content, covering the important \
+events and ideas (key scenes, memorable dialogue, character development). These summaries will later \
+be merged with those of other chapter batches: do not shortchange them into a telegraphic list, \
+develop each one to at least 300 words (more if the chapter is rich in events), with no maximum \
+limit. Write each summary in plain text, with no Markdown formatting whatsoever.
+
+Chapters:
+---
+{chapters_text}
+---
+
+Respond STRICTLY with a valid JSON object, with no text whatsoever before or after, no markdown \
+fences, in the exact format, with EXACTLY one entry per chapter in the batch above, in the same \
+order, reusing the exact title of each chapter:
+{{
+  "chapter_summaries": [{{"title": "Exact chapter title", "summary": "Summary in English..."}}, ...]
+}}
+
+Respond only with the JSON object."""
+
+
+DEFAULT_CONSOLIDATION_PROMPT_EN = """Here are the successive chapter summaries of the book "{book_title}" \
+by {author} (the book is too large to be processed in a single request, so it was split into chapter \
+batches and summarized batch by batch).
+
+Chapter summaries:
+---
+{chapter_summaries}
+---
+
+From these partial summaries, ALWAYS IN ENGLISH, produce the following four elements:
+
+1. A SHORT SUMMARY (two to three paragraphs maximum, no more) giving a concise overview of the plot \
+from beginning to end.
+2. A DETAILED SUMMARY (at least 1500 words, and considerably more - 2500 to 4000 words - for a long \
+novel with a rich plot), that merges and rephrases the chapter summaries above into a coherent, \
+fluid text (not a mere concatenation), preserving the key events, the twists, and the characters' \
+development from each part, avoiding repetition, and ensuring clear narrative continuity between \
+parts. Each section heading must stand alone on its own line and start with "## " (for example \
+"## Part 1: ..."), or "### " for a subheading; do not use any other Markdown formatting in the text.
+3. The list of MAIN CHARACTERS AND ENTITIES: individual characters who appear across multiple \
+chapters or scenes AND have a direct impact on the plot (through their decisions, actions, or \
+relationships with the protagonist), as well as groups or organizations central to the plot \
+(faction, council, army, family, secret society...) whenever they act as a fully-fledged actor in \
+the story. Ignore characters or groups who appear only once or who do not influence the course of \
+the story. Aim typically for between 3 and 20 entries depending on how rich the novel is (fewer for \
+a short text or one centered on few characters, more for a sprawling ensemble saga) - never invent \
+an entry to reach this number. For each character, write a description covering their role, \
+personality, and development; for each group or organization, describe instead its role in the \
+plot, its goals, and its influence on events.
+4. A literary ANALYSIS of at least 600 to 900 words, structured in several distinct paragraphs \
+covering the main themes, the writing style and narrative construction, then the work's significance \
+- developed and well-argued, without repeating content already covered by the summaries.
+
+Respond STRICTLY with a valid JSON object, with no text whatsoever before or after, no markdown \
+fences, in the exact format:
+{{
+  "summary": "The short summary here, in English...",
+  "detailed_summary": "The detailed, developed summary here, in English...",
+  "characters": [{{"name": "Name", "description": "Description in English..."}}, ...],
+  "analysis": "The literary analysis here, in English..."
+}}
+
+Respond only with the JSON object."""
+
+
+DEFAULT_PROMPT_TEMPLATES_FR = {
     "full_report": DEFAULT_FULL_REPORT_PROMPT,
     "chapter_summary": DEFAULT_CHAPTER_SUMMARY_PROMPT,
     "consolidation": DEFAULT_CONSOLIDATION_PROMPT,
 }
 
+DEFAULT_PROMPT_TEMPLATES_EN = {
+    "full_report": DEFAULT_FULL_REPORT_PROMPT_EN,
+    "chapter_summary": DEFAULT_CHAPTER_SUMMARY_PROMPT_EN,
+    "consolidation": DEFAULT_CONSOLIDATION_PROMPT_EN,
+}
 
-def _get_prompt_template(key: str, settings_dir: Path | None) -> str:
-    """Renvoie le template personnalisé par l'utilisateur pour ce prompt s'il
-    existe, sinon le template par défaut."""
-    if settings_dir is not None:
-        custom = load_custom_prompts(settings_dir)
+_DEFAULT_PROMPT_TEMPLATES_BY_LANGUAGE = {
+    "fr": DEFAULT_PROMPT_TEMPLATES_FR,
+    "en": DEFAULT_PROMPT_TEMPLATES_EN,
+}
+
+
+def default_prompt_templates() -> dict[str, str]:
+    """Prompts par défaut pour la langue actuellement choisie par l'utilisateur
+    (voir app.i18n) : la langue de sortie demandée à Gemini suit toujours la
+    langue de l'UI au moment de la génération, jamais l'inverse."""
+    return _DEFAULT_PROMPT_TEMPLATES_BY_LANGUAGE[i18n.current_language()]
+
+
+def _get_prompt_template(key: str, use_custom_prompts: bool) -> str:
+    """Renvoie le template personnalisé par l'utilisateur pour ce prompt et
+    cette langue s'il existe, sinon le template par défaut de la langue
+    actuellement choisie (voir default_prompt_templates). Les personnalisations
+    sont propres à chaque langue : celles du français n'affectent jamais
+    l'anglais, et inversement."""
+    if use_custom_prompts:
+        custom = load_custom_prompts(i18n.current_language())
         if key in custom:
             return custom[key]
-    return DEFAULT_PROMPT_TEMPLATES[key]
+    return default_prompt_templates()[key]
 
 
 def _format_prompt_template(template: str, prompt_label: str, **kwargs: str) -> str:
@@ -381,39 +511,42 @@ def _format_prompt_template(template: str, prompt_label: str, **kwargs: str) -> 
     try:
         return template.format(**kwargs)
     except KeyError as exc:
-        raise GeminiError(
-            f"Le prompt personnalisé « {prompt_label} » contient une erreur : le repère {exc} n'est "
-            "pas reconnu. Vérifiez son orthographe dans la fenêtre Prompts (bouton « Réinitialiser ce "
-            "prompt » si besoin)."
-        ) from exc
+        raise GeminiError(tr("gemini_errors.invalid_prompt_placeholder", prompt_label=prompt_label, error=exc)) from exc
 
 
-def _full_report_prompt(content: BookContent, settings_dir: Path | None) -> str:
+def _full_report_prompt(content: BookContent, use_custom_prompts: bool) -> str:
     """Un seul prompt demandant les deux résumés + personnages + analyse en une
     requête, pour un livre dont le texte tient dans la fenêtre de contexte du modèle."""
-    template = _get_prompt_template("full_report", settings_dir)
+    template = _get_prompt_template("full_report", use_custom_prompts)
     return _format_prompt_template(
         template,
-        "Résumé + personnages + analyse",
+        tr("prompts_dialog.tabs.full_report.title"),
         book_title=content.book_title,
         author=content.author,
         full_text=content.full_text,
     )
 
 
+_CHAPTER_TITLE_MARKER_BY_LANGUAGE = {"fr": "TITRE", "en": "TITLE"}
+
+
 def _chapters_batch_text(chapters: list[Chapter]) -> str:
-    return "\n\n".join(f"[[[TITRE: {chapter.title}]]]\n{chapter.text}" for chapter in chapters)
+    """Le marqueur ([[[TITRE: ...]]] ou [[[TITLE: ...]]]) doit correspondre à
+    celui annoncé dans le prompt de la langue active (_chapter_summary_prompt),
+    sous peine d'incohérence pour Gemini entre l'instruction et le texte reçu."""
+    marker = _CHAPTER_TITLE_MARKER_BY_LANGUAGE[i18n.current_language()]
+    return "\n\n".join(f"[[[{marker}: {chapter.title}]]]\n{chapter.text}" for chapter in chapters)
 
 
-def _chapter_summary_prompt(book_title: str, author: str, batch: list[Chapter], settings_dir: Path | None) -> str:
+def _chapter_summary_prompt(book_title: str, author: str, batch: list[Chapter], use_custom_prompts: bool) -> str:
     """Prompt de résumé appliqué à un LOT de chapitres consécutifs (voir
     _split_chapters_into_batches) plutôt qu'à un seul, pour limiter le nombre
     de requêtes envoyées à l'API sur le palier gratuit (quota journalier très
     serré : 20 requêtes/jour par défaut)."""
-    template = _get_prompt_template("chapter_summary", settings_dir)
+    template = _get_prompt_template("chapter_summary", use_custom_prompts)
     return _format_prompt_template(
         template,
-        "Résumé d'un lot de chapitres",
+        tr("prompts_dialog.tabs.chapter_summary.title"),
         book_title=book_title,
         author=author,
         chapters_text=_chapters_batch_text(batch),
@@ -421,16 +554,16 @@ def _chapter_summary_prompt(book_title: str, author: str, batch: list[Chapter], 
 
 
 def _consolidation_prompt(
-    book_title: str, author: str, chapter_summaries: list[tuple[str, str]], settings_dir: Path | None
+    book_title: str, author: str, chapter_summaries: list[tuple[str, str]], use_custom_prompts: bool
 ) -> str:
     # Un chapitre au résumé vide (page sans contenu narratif, voir
     # _parse_chapter_summaries_batch_json) n'a rien à apporter à la
     # consolidation : l'inclure enverrait un titre suivi de rien à Gemini.
     joined = "\n\n".join(f"### {title}\n{summary}" for title, summary in chapter_summaries if summary)
-    template = _get_prompt_template("consolidation", settings_dir)
+    template = _get_prompt_template("consolidation", use_custom_prompts)
     return _format_prompt_template(
         template,
-        "Fusion résumé + personnages + analyse",
+        tr("prompts_dialog.tabs.consolidation.title"),
         book_title=book_title,
         author=author,
         chapter_summaries=joined,
@@ -459,7 +592,7 @@ def _parse_json_object(raw_text: str) -> tuple[dict, str]:
     try:
         obj, end_index = json.JSONDecoder().raw_decode(text)
     except json.JSONDecodeError as exc:
-        raise GeminiError(f"Réponse de Gemini illisible (format inattendu) : {exc}") from exc
+        raise GeminiError(tr("gemini_errors.unreadable_response", error=exc)) from exc
     leftover = text[end_index:].strip()
     return obj, leftover
 
@@ -495,7 +628,7 @@ def _parse_full_report_json(raw_text: str) -> tuple[str, str, list[Character], s
         # pas que la racine soit un objet conforme au schéma demandé (ex : une
         # liste accolée) : sans ce contrôle, l'utilisateur voyait une erreur
         # technique brute ("'list' object has no attribute 'get'").
-        raise GeminiError("La réponse de Gemini n'a pas la forme attendue (racine JSON non exploitable).")
+        raise GeminiError(tr("gemini_errors.unexpected_response_shape"))
 
     summary = _normalize_dashes(str(data.get("summary", "")).strip())
     detailed_summary = _normalize_dashes(str(data.get("detailed_summary", "")).strip())
@@ -503,7 +636,7 @@ def _parse_full_report_json(raw_text: str) -> tuple[str, str, list[Character], s
     characters = _parse_characters_list(data.get("characters", []))
 
     if not summary:
-        raise GeminiError("La réponse de Gemini ne contient pas de résumé exploitable.")
+        raise GeminiError(tr("gemini_errors.no_usable_summary"))
 
     return summary, detailed_summary, characters, analysis, leftover
 
@@ -539,7 +672,7 @@ def generate_book_report(
     quota_tracker: QuotaTracker,
     on_progress: ProgressCallback | None = None,
     on_quota_update: QuotaCallback | None = None,
-    settings_dir: Path | None = None,
+    use_custom_prompts: bool = True,
     resume_chapter_summaries: list[tuple[str, str]] | None = None,
     resume_batches_done: int = 0,
 ) -> BookReport:
@@ -566,7 +699,7 @@ def generate_book_report(
             on_quota_update=on_quota_update,
         )
 
-    report(0, 1, "Comptage des tokens du texte extrait…")
+    report(0, 1, tr("gemini_progress.counting_tokens"))
     token_count = count_tokens(content.full_text)
     leftovers: list[str] = []
 
@@ -574,9 +707,9 @@ def generate_book_report(
         # Cas le plus courant : le texte tient sous la limite de débit par minute
         # (TPM) du palier gratuit, donc les deux résumés, personnages et analyse
         # sont demandés en une seule requête pour limiter la consommation de quota.
-        report(0, 1, f"Le livre tient en une seule requête ({token_count} tokens). Génération en cours…")
+        report(0, 1, tr("gemini_progress.single_request", token_count=token_count))
         summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
-            call(_full_report_prompt(content, settings_dir))
+            call(_full_report_prompt(content, use_custom_prompts))
         )
         if leftover:
             leftovers.append(leftover)
@@ -596,41 +729,49 @@ def generate_book_report(
         report(
             0,
             total_steps,
-            f"Livre trop volumineux ({token_count} tokens). Découpage en {len(batches)} lot(s) "
-            f"de chapitres ({len(content.chapters)} chapitres au total)…",
+            tr(
+                "gemini_progress.book_too_large",
+                token_count=token_count,
+                batch_count=len(batches),
+                chapter_count=len(content.chapters),
+            ),
         )
 
         chapter_summaries: list[tuple[str, str]] = list(resume_chapter_summaries or [])
         start_index = min(resume_batches_done, len(batches))
         for i, batch in enumerate(batches[start_index:], start=start_index + 1):
-            report(i - 1, total_steps, f"Résumé du lot de chapitres {i}/{len(batches)}…")
+            report(i - 1, total_steps, tr("gemini_progress.summarizing_batch", current=i, total=len(batches)))
             try:
                 batch_summaries, leftover = _parse_chapter_summaries_batch_json(
-                    call(_chapter_summary_prompt(content.book_title, content.author, batch, settings_dir)), batch
+                    call(_chapter_summary_prompt(content.book_title, content.author, batch, use_custom_prompts)), batch
                 )
             except GeminiError as exc:
                 if chapter_summaries:
                     raise PartialGenerationError(
-                        str(exc), chapter_summaries, batches_done=i - 1, batches_total=len(batches)
+                        str(exc),
+                        chapter_summaries,
+                        batches_done=i - 1,
+                        batches_total=len(batches),
+                        error_kind=exc.error_kind,
                     ) from exc
                 raise
             if leftover:
                 leftovers.append(leftover)
             chapter_summaries.extend(batch_summaries)
-            report(i, total_steps, f"Lot de chapitres {i}/{len(batches)} résumé.")
+            report(i, total_steps, tr("gemini_progress.batch_summarized", current=i, total=len(batches)))
 
-        report(
-            len(batches),
-            total_steps,
-            "Résumés fusionnés. Identification des personnages et rédaction de l'analyse…",
-        )
+        report(len(batches), total_steps, tr("gemini_progress.merging_summaries"))
         try:
             summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
-                call(_consolidation_prompt(content.book_title, content.author, chapter_summaries, settings_dir))
+                call(_consolidation_prompt(content.book_title, content.author, chapter_summaries, use_custom_prompts))
             )
         except GeminiError as exc:
             raise PartialGenerationError(
-                str(exc), chapter_summaries, batches_done=len(batches), batches_total=len(batches)
+                str(exc),
+                chapter_summaries,
+                batches_done=len(batches),
+                batches_total=len(batches),
+                error_kind=exc.error_kind,
             ) from exc
         if leftover:
             leftovers.append(leftover)
@@ -638,7 +779,7 @@ def generate_book_report(
         was_split = True
         chapter_count = len(content.chapters)
 
-    report(1, 1, "Résumé, personnages et analyse terminés.")
+    report(1, 1, tr("gemini_progress.done"))
 
     return BookReport(
         book_title=content.book_title,

@@ -27,6 +27,7 @@ from reportlab.platypus import (
 from xml.sax.saxutils import escape
 
 from app.book_report import BookReport
+from app.i18n import tr
 
 INK = colors.HexColor("#201E1C")
 INK_MUTED = colors.HexColor("#6E6A66")
@@ -287,7 +288,7 @@ def _body_flowables(text: str) -> list:
 
 def _character_flowables(result: BookReport) -> list:
     if not result.characters:
-        return [Paragraph("Aucun personnage principal identifié.", STYLES["muted"])]
+        return [Paragraph(tr("main_window.no_characters"), STYLES["muted"])]
     flowables = []
     for index, character in enumerate(result.characters):
         if index > 0:
@@ -375,20 +376,20 @@ def export_book_report_to_pdf(result: BookReport, output_path: str) -> None:
         HRFlowable(width=2.2 * cm, thickness=2, color=GOLD, spaceBefore=0, spaceAfter=14, hAlign="CENTER")
     )
 
-    story.extend(_tag_heading("Résumé court"))
+    story.extend(_tag_heading(tr("pdf_export.summary_heading")))
     story.extend(_body_flowables(result.summary_text))
 
     if result.detailed_summary_text:
         story.append(PageBreak())
-        story.extend(_tag_heading("Résumé détaillé"))
+        story.extend(_tag_heading(tr("pdf_export.detailed_summary_heading")))
         story.extend(_body_flowables(result.detailed_summary_text))
 
     story.append(PageBreak())
-    story.extend(_tag_heading("Personnages principaux"))
+    story.extend(_tag_heading(tr("pdf_export.characters_heading")))
     story.extend(_character_flowables(result))
 
     story.append(PageBreak())
-    story.extend(_tag_heading("Analyse littéraire"))
+    story.extend(_tag_heading(tr("pdf_export.analysis_heading")))
     story.extend(_body_flowables(result.analysis_text))
 
     footer = _footer_factory(result.book_title)

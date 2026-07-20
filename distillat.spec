@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('LICENSE', '.'), ('icons/open-book_4681875.png', 'icons')],
+    datas=[('LICENSE', '.'), ('icons/open-book_4681875.png', 'icons'), ('locales', 'locales')],
     hiddenimports=[
         'google.generativeai',
         'google.ai.generativelanguage',

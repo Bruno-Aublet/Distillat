@@ -4,11 +4,12 @@ import re
 import webbrowser
 from pathlib import Path
 
-from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
+from PyQt5.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt, QTimer
 from PyQt5.QtGui import (
     QColor,
     QDragEnterEvent,
     QDropEvent,
+    QFont,
     QIcon,
     QPainter,
     QPen,
@@ -17,6 +18,7 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -35,11 +37,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from app import config, generation_resume
+from app import config, generation_resume, i18n
 from app.__version__ import VERSION
+from app.i18n import tr
 from app.update_checker import check_for_updates_on_startup, releases_page_url
 from app.book_report import BookReport, Character, sanitize_filename
-from app.gemini_client import DEFAULT_PROMPT_TEMPLATES, MODEL_NAME
+from app.gemini_client import MODEL_NAME, default_prompt_templates
 from app.pdf_export import export_book_report_to_pdf
 from app.prompts_store import load_custom_prompts, save_custom_prompts
 from app.quota_tracker import QuotaSnapshot, QuotaTracker, save_quota_limits
@@ -52,7 +55,7 @@ class LicenseDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self.setWindowTitle("Licence")
+        self.setWindowTitle(tr("license_dialog.window_title"))
         self.resize(650, 550)
 
         layout = QVBoxLayout(self)
@@ -66,9 +69,7 @@ class LicenseDialog(QDialog):
             license_view.setPlainText(license_path.read_text(encoding="utf-8"))
         except OSError:
             license_view.setPlainText(
-                f"Fichier de licence introuvable ({license_path}).\n\n"
-                "Ce logiciel est distribué sous licence GNU GPL v3 : "
-                "https://www.gnu.org/licenses/gpl-3.0.txt"
+                tr("license_dialog.file_not_found", license_path=license_path)
             )
         layout.addWidget(license_view)
 
@@ -88,16 +89,12 @@ class ExtraTextDialog(QDialog):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setWindowModality(Qt.NonModal)
-        self.setWindowTitle("Contenu supplémentaire ignoré")
+        self.setWindowTitle(tr("extra_text_dialog.window_title"))
         self.resize(600, 450)
 
         layout = QVBoxLayout(self)
 
-        explanation = QLabel(
-            "Gemini a produit ce texte en plus du contenu utilisé pour la fiche. "
-            "Il peut s'agir d'une répétition sans intérêt ou de contenu légitime : "
-            "vérifiez-le et copiez-collez ce qui vous semble utile."
-        )
+        explanation = QLabel(tr("extra_text_dialog.explanation"))
         explanation.setWordWrap(True)
         explanation.setStyleSheet("color: #555;")
         layout.addWidget(explanation)
@@ -146,26 +143,18 @@ class ApiKeyDialog(QDialog):
     def __init__(self, parent=None, current_api_key: str | None = None):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self.setWindowTitle("Clé API Gemini")
+        self.setWindowTitle(tr("api_key_dialog.window_title"))
         self.setMinimumWidth(420)
 
         layout = QVBoxLayout(self)
 
-        info = QLabel(
-            "Récupérez votre clé gratuite sur "
-            '<a href="https://aistudio.google.com/apikey">Google AI Studio</a>. '
-            "Elle sera enregistrée de façon chiffrée via le Gestionnaire "
-            "d'identification Windows - ne la partagez pas."
-        )
+        info = QLabel(tr("api_key_dialog.info"))
         info.setWordWrap(True)
         info.setOpenExternalLinks(True)
         info.setAlignment(Qt.AlignCenter)
         layout.addWidget(info)
 
-        warning = QLabel(
-            "⚠️ Ne cliquez jamais sur « Activer la facturation » : "
-            "vous perdriez le palier gratuit de Gemini."
-        )
+        warning = QLabel(tr("api_key_dialog.warning"))
         warning.setWordWrap(True)
         warning.setStyleSheet("color: #b02a2a; font-weight: bold;")
         warning.setAlignment(Qt.AlignCenter)
@@ -175,7 +164,7 @@ class ApiKeyDialog(QDialog):
         key_row = QHBoxLayout()
         self.key_input = QLineEdit()
         self.key_input.setEchoMode(QLineEdit.Password)
-        self.key_input.setPlaceholderText("AIza...")
+        self.key_input.setPlaceholderText(tr("api_key_dialog.key_placeholder"))
         if current_api_key:
             self.key_input.setText(current_api_key)
         key_row.addWidget(self.key_input)
@@ -183,7 +172,7 @@ class ApiKeyDialog(QDialog):
         self.toggle_visibility_button = QPushButton()
         self.toggle_visibility_button.setFixedSize(32, 26)
         self.toggle_visibility_button.setCheckable(True)
-        self.toggle_visibility_button.setToolTip("Afficher/masquer la clé")
+        self.toggle_visibility_button.setToolTip(tr("eye_icon.tooltip"))
         self.toggle_visibility_button.setIcon(_draw_eye_icon("#555555", slashed=False))
         self.toggle_visibility_button.setStyleSheet(
             """
@@ -207,7 +196,7 @@ class ApiKeyDialog(QDialog):
         self.toggle_visibility_button.toggled.connect(self._on_toggle_visibility)
         key_row.addWidget(self.toggle_visibility_button)
 
-        form.addRow("Clé API :", key_row)
+        form.addRow(tr("api_key_dialog.key_label"), key_row)
         layout.addLayout(form)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -230,21 +219,16 @@ class QuotaLimitsDialog(QDialog):
     def __init__(self, parent=None, current_rpm: int = 0, current_tpm: int = 0, current_rpd: int = 0):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self.setWindowTitle("Limites de quota Gemini")
+        self.setWindowTitle(tr("quota_limits_dialog.window_title"))
         self.setMinimumWidth(420)
 
         layout = QVBoxLayout(self)
 
-        model_label = QLabel(f"Modèle utilisé : <b>{MODEL_NAME}</b>")
+        model_label = QLabel(tr("quota_limits_dialog.model_label", model_name=MODEL_NAME))
         model_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(model_label)
 
-        info = QLabel(
-            "Google ne publie pas ces limites via l'API. Consultez les vôtres sur "
-            '<a href="https://aistudio.google.com/rate-limit">aistudio.google.com/rate-limit</a> '
-            "(pour ce modèle précisément) et ajustez-les ici si elles diffèrent de "
-            "celles affichées dans l'application."
-        )
+        info = QLabel(tr("quota_limits_dialog.info"))
         info.setWordWrap(True)
         info.setOpenExternalLinks(True)
         info.setAlignment(Qt.AlignCenter)
@@ -257,20 +241,20 @@ class QuotaLimitsDialog(QDialog):
         self.rpm_input.setRange(1, 100_000)
         self.rpm_input.setValue(current_rpm)
         self.rpm_input.setFixedWidth(100)
-        form.addRow("Requêtes par minute (RPM) :", self.rpm_input)
+        form.addRow(tr("quota_limits_dialog.rpm_label"), self.rpm_input)
 
         self.tpm_input = QSpinBox()
         self.tpm_input.setRange(1, 100_000_000)
         self.tpm_input.setSingleStep(1000)
         self.tpm_input.setValue(current_tpm)
         self.tpm_input.setFixedWidth(100)
-        form.addRow("Tokens par minute (TPM) :", self.tpm_input)
+        form.addRow(tr("quota_limits_dialog.tpm_label"), self.tpm_input)
 
         self.rpd_input = QSpinBox()
         self.rpd_input.setRange(1, 1_000_000)
         self.rpd_input.setValue(current_rpd)
         self.rpd_input.setFixedWidth(100)
-        form.addRow("Requêtes par jour (RPD) :", self.rpd_input)
+        form.addRow(tr("quota_limits_dialog.rpd_label"), self.rpd_input)
 
         layout.addLayout(form)
 
@@ -283,32 +267,11 @@ class QuotaLimitsDialog(QDialog):
         return self.rpm_input.value(), self.tpm_input.value(), self.rpd_input.value()
 
 
-_PROMPT_TABS: tuple[tuple[str, str, str], ...] = (
-    (
-        "full_report",
-        "Résumé + personnages + analyse",
-        "Cas le plus courant : le livre tient en entier dans une seule requête. Ce prompt "
-        "demande en une fois le résumé court, le résumé détaillé, les personnages et "
-        "l'analyse littéraire.",
-    ),
-    (
-        "chapter_summary",
-        "1. Résumé d'un lot de chapitres",
-        "Cas d'un livre trop volumineux pour tenir dans une seule requête : premier prompt "
-        "du découpage. Le livre est réparti en lots de plusieurs chapitres consécutifs (le "
-        "plus possible à la fois selon la taille du livre), pour limiter le nombre de "
-        "requêtes envoyées à l'API (le quota gratuit journalier est très limité). Ce prompt "
-        "reçoit un lot et doit résumer chaque chapitre du lot séparément.",
-    ),
-    (
-        "consolidation",
-        "2. Fusion résumé + personnages + analyse",
-        "Toujours dans le cas d'un livre découpé : une fois tous les lots résumés "
-        "séparément, ce prompt reçoit l'ensemble des résumés de chapitre (jamais le texte "
-        "intégral) et produit en une seule fois le résumé court, le résumé détaillé, les "
-        "personnages et l'analyse littéraire du livre entier.",
-    ),
-)
+def _prompt_tabs() -> tuple[tuple[str, str, str], ...]:
+    return tuple(
+        (key, tr(f"prompts_dialog.tabs.{key}.title"), tr(f"prompts_dialog.tabs.{key}.explanation"))
+        for key in ("full_report", "chapter_summary", "consolidation")
+    )
 
 
 class PromptsDialog(QDialog):
@@ -319,21 +282,14 @@ class PromptsDialog(QDialog):
     def __init__(self, parent=None, current_prompts: dict[str, str] | None = None):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self.setWindowTitle("Prompts Gemini")
+        self.setWindowTitle(tr("prompts_dialog.window_title"))
         self.resize(750, 600)
 
         current_prompts = current_prompts or {}
 
         layout = QVBoxLayout(self)
 
-        warning = QLabel(
-            "⚠️ Ces prompts pilotent directement la génération des fiches et fonctionnent tels "
-            "quels. Les modifier peut faire échouer la génération ou produire des résultats "
-            "incohérents (résultat non exploitable, réponse non reconnue par l'application, etc.) : "
-            "modifiez-les à vos risques et périls. Les portions entre accolades, par exemple "
-            "{book_title} ou {full_text}, sont remplacées automatiquement par l'application : "
-            "ne les supprimez pas et ne changez pas leur orthographe, sous peine d'erreur."
-        )
+        warning = QLabel(tr("prompts_dialog.warning"))
         warning.setWordWrap(True)
         warning.setStyleSheet("color: #b02a2a; font-weight: bold;")
         layout.addWidget(warning)
@@ -342,7 +298,7 @@ class PromptsDialog(QDialog):
         layout.addWidget(self.tabs, stretch=1)
 
         self._text_edits: dict[str, QTextEdit] = {}
-        for key, tab_title, tab_explanation in _PROMPT_TABS:
+        for key, tab_title, tab_explanation in _prompt_tabs():
             self._text_edits[key] = self._build_tab(key, tab_title, tab_explanation, current_prompts.get(key, ""))
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -360,14 +316,41 @@ class PromptsDialog(QDialog):
         tab_layout.addWidget(explanation)
 
         text_edit = QTextEdit()
-        text_edit.setPlainText(initial_text or DEFAULT_PROMPT_TEMPLATES[key])
-        text_edit.setFontFamily("Courier New")
+        # setFont AVANT tout setPlainText : setPlainText réinitialise le
+        # document en repartant de la police par défaut du widget, donc sans
+        # cet appel initial, un futur reset retomberait sur la police système
+        # même si le format de caractère est corrigé après coup.
+        text_edit.setFont(QFont("Courier New"))
+
+        def _set_prompt_text(text: str) -> None:
+            # setFontFamily (ou setCurrentFont) ne s'applique qu'au point
+            # d'insertion courant, sans garantie d'effet sur le texte du
+            # document une fois setPlainText appelé : on force donc
+            # explicitement la police sur tout le document déjà rempli, en
+            # sélectionnant tout son contenu après coup. document().setDefaultFont
+            # et un repaint forcé du viewport, en plus du mergeCharFormat,
+            # pour contourner un défaut de rafraîchissement du rendu observé
+            # sur certaines machines (texte affiché dans une police différente
+            # de l'état logique du widget tant qu'aucun repaint n'est forcé).
+            courier = QFont("Courier New")
+            text_edit.document().setDefaultFont(courier)
+            text_edit.setPlainText(text)
+            cursor = text_edit.textCursor()
+            cursor.select(QTextCursor.Document)
+            char_format = cursor.charFormat()
+            char_format.setFontFamily("Courier New")
+            cursor.mergeCharFormat(char_format)
+            text_edit.setCurrentFont(courier)
+            text_edit.viewport().update()
+            text_edit.update()
+
         tab_layout.addWidget(text_edit)
+        _set_prompt_text(initial_text or default_prompt_templates()[key])
 
         reset_row = QHBoxLayout()
         reset_row.addStretch()
-        reset_button = QPushButton("Réinitialiser ce prompt")
-        reset_button.clicked.connect(lambda: text_edit.setPlainText(DEFAULT_PROMPT_TEMPLATES[key]))
+        reset_button = QPushButton(tr("prompts_dialog.reset_button"))
+        reset_button.clicked.connect(lambda: _set_prompt_text(default_prompt_templates()[key]))
         reset_row.addWidget(reset_button)
         tab_layout.addLayout(reset_row)
 
@@ -389,6 +372,8 @@ class DropZone(QLabel):
     """Zone de glisser-déposer pour les fichiers EPUB/PDF (à résumer) et les
     fiches Distillat déjà générées (.distillat.json, à ouvrir directement)."""
 
+    _ICON_HTML = None  # balise <img> en data URI, construite une fois au premier usage
+
     def __init__(self, on_file_dropped, on_report_dropped, parent=None):
         super().__init__(parent)
         self.on_file_dropped = on_file_dropped
@@ -397,8 +382,28 @@ class DropZone(QLabel):
         self.setAcceptDrops(True)
         self.setAlignment(Qt.AlignCenter)
         self.setMinimumHeight(180)
-        self.setText("📚\n\nGlissez-déposez un fichier EPUB, PDF ou une fiche .distillat.json ici\nou cliquez pour parcourir")
+        self.setTextFormat(Qt.RichText)
+        self._set_message(tr("drop_zone.prompt"))
         self._set_style(active=False)
+
+    @classmethod
+    def _icon_html(cls) -> str:
+        if cls._ICON_HTML is None:
+            icon_path = config.get_app_icon_path()
+            pixmap = QPixmap(str(icon_path)) if icon_path.exists() else QPixmap()
+            if pixmap.isNull():
+                cls._ICON_HTML = ""
+            else:
+                pixmap = pixmap.scaledToHeight(64, Qt.SmoothTransformation)
+                buffer = QBuffer()
+                buffer.open(QIODevice.WriteOnly)
+                pixmap.save(buffer, "PNG")
+                data_base64 = buffer.data().toBase64().data().decode("ascii")
+                cls._ICON_HTML = f'<img src="data:image/png;base64,{data_base64}"><br><br>'
+        return cls._ICON_HTML
+
+    def _set_message(self, message: str) -> None:
+        self.setText(f"{self._icon_html()}{message}")
 
     def set_busy(self, busy: bool) -> None:
         """Désactive le dépôt et le clic (choix de fichier) tant qu'un résumé
@@ -406,14 +411,9 @@ class DropZone(QLabel):
         sélectionné ou d'écraser la fiche affichée pendant le traitement."""
         self.busy = busy
         if busy:
-            self.setText(
-                "📚\n\nRésumé en cours...\nGlissez-déposez un nouveau fichier une fois terminé"
-            )
+            self._set_message(tr("drop_zone.busy"))
         else:
-            self.setText(
-                "📚\n\nGlissez-déposez un fichier EPUB, PDF ou une fiche .distillat.json ici\n"
-                "ou cliquez pour parcourir"
-            )
+            self._set_message(tr("drop_zone.prompt"))
 
     def _set_style(self, active: bool) -> None:
         border_color = "#4a90d9" if active else "#9aa5b1"
@@ -472,11 +472,9 @@ class DropZone(QLabel):
             return
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Choisir un fichier EPUB, PDF ou une fiche",
+            tr("drop_zone.file_dialog_title"),
             "",
-            "Tous les formats pris en charge (*.epub *.pdf *.distillat.json);;"
-            "Fichiers EPUB/PDF (*.epub *.pdf);;"
-            "Fiches Distillat (*.distillat.json)",
+            tr("drop_zone.file_dialog_filter"),
         )
         if not path:
             return
@@ -575,7 +573,7 @@ class AutoHeightTextEdit(QTextEdit):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"Distillat v{VERSION} - Résumé de livres avec Gemini")
+        self.setWindowTitle(tr("main_window.window_title", version=VERSION))
         self._size_to_available_screen()
 
         self.selected_book_path: str | None = None
@@ -593,6 +591,7 @@ class MainWindow(QMainWindow):
             settings_dir=config.get_settings_dir(),
         )
 
+        self._latest_version_available: str | None = None
         self._elapsed_seconds = 0
         self._last_progress_message = ""
         self._elapsed_timer = QTimer(self)
@@ -633,6 +632,63 @@ class MainWindow(QMainWindow):
             available.y() + (available.height() - height) // 2,
         )
 
+    def _on_language_changed(self, index: int) -> None:
+        language = self.language_selector.itemData(index)
+        if language is None or language == i18n.current_language():
+            return
+        i18n.set_language(language)
+        config.save_language_setting(language)
+        self.retranslate_ui()
+
+    def retranslate_ui(self) -> None:
+        """Réapplique les textes statiques (titres, labels fixes, placeholders,
+        titres d'onglets, boutons) dans la langue actuellement chargée, sans
+        toucher à l'état dynamique actuellement affiché (fiche en cours,
+        statut de génération, quota affiché...) qui se retraduira de lui-même
+        à sa prochaine mise à jour naturelle."""
+        self.setWindowTitle(tr("main_window.window_title", version=VERSION))
+        self.title_label.setText(tr("main_window.title_label"))
+        self.language_label.setText(tr("language_selector.label"))
+        self.language_selector.setItemText(0, tr("language_selector.french"))
+        self.language_selector.setItemText(1, tr("language_selector.english"))
+        self.prompts_button.setText(tr("main_window.prompts_button"))
+        self.quota_limits_button.setText(tr("main_window.quota_limits_button"))
+        self.api_key_button.setText(tr("main_window.api_key_button"))
+        self.output_language_hint_label.setText(tr("main_window.output_language_hint"))
+        if self._latest_version_available:
+            self.update_banner_label.setText(
+                tr("main_window.update_banner", version=self._latest_version_available)
+            )
+        self.drop_zone.set_busy(self.drop_zone.busy)
+        if self.selected_book_path:
+            self.file_label.setText(
+                tr("main_window.file_selected", filename=os.path.basename(self.selected_book_path))
+            )
+        else:
+            self.file_label.setText(tr("main_window.no_file_selected"))
+        self.remove_file_button.setText(tr("main_window.remove_file_button"))
+        self.summarize_button.setText(tr("main_window.summarize_button"))
+        self.extra_text_label.setText(tr("main_window.extra_text_label"))
+        self.quota_disclaimer_label.setText(tr("main_window.quota_disclaimer"))
+        self.load_report_button.setText(tr("main_window.load_report_button"))
+        self.save_report_button.setText(tr("main_window.save_report_button"))
+        self.close_report_button.setText(tr("main_window.close_report_button"))
+        self.save_button.setText(tr("main_window.export_pdf_button"))
+        self.footer_button.setText(tr("main_window.footer_button"))
+        if not self.last_result:
+            self.cover_label.setText(tr("main_window.no_cover"))
+        self.summary_view.setPlaceholderText(tr("main_window.summary_placeholder"))
+        self.detailed_summary_view.setPlaceholderText(tr("main_window.detailed_summary_placeholder"))
+        self.analysis_view.setPlaceholderText(tr("main_window.analysis_placeholder"))
+        self.result_tabs.setTabText(0, tr("main_window.tab_cover"))
+        self.result_tabs.setTabText(1, tr("main_window.tab_summary"))
+        self.result_tabs.setTabText(2, tr("main_window.tab_detailed_summary"))
+        self.result_tabs.setTabText(3, tr("main_window.tab_characters"))
+        self.result_tabs.setTabText(4, tr("main_window.tab_analysis"))
+        if not self.last_result:
+            self.characters_placeholder.setText(tr("main_window.characters_placeholder"))
+        self._update_quota_display(self.quota_tracker.snapshot())
+
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
@@ -641,20 +697,39 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(20, 20, 20, 6)
 
         header = QHBoxLayout()
-        title_label = QLabel("Distillat")
-        title_label.setStyleSheet("font-size: 22px; font-weight: bold;")
-        header.addWidget(title_label)
+        self.title_label = QLabel(tr("main_window.title_label"))
+        self.title_label.setStyleSheet("font-size: 22px; font-weight: bold;")
+        header.addWidget(self.title_label)
         header.addStretch()
-        self.prompts_button = QPushButton("Prompts")
+        self.language_label = QLabel(tr("language_selector.label"))
+        header.addWidget(self.language_label)
+        self.language_selector = QComboBox()
+        self.language_selector.addItem(tr("language_selector.french"), "fr")
+        self.language_selector.addItem(tr("language_selector.english"), "en")
+        current_index = self.language_selector.findData(i18n.current_language())
+        self.language_selector.setCurrentIndex(max(current_index, 0))
+        self.language_selector.currentIndexChanged.connect(self._on_language_changed)
+        header.addWidget(self.language_selector)
+        self.prompts_button = QPushButton(tr("main_window.prompts_button"))
         self.prompts_button.clicked.connect(self._on_edit_prompts)
         header.addWidget(self.prompts_button)
-        self.quota_limits_button = QPushButton("Limites de quota")
+        self.quota_limits_button = QPushButton(tr("main_window.quota_limits_button"))
         self.quota_limits_button.clicked.connect(self._on_edit_quota_limits)
         header.addWidget(self.quota_limits_button)
-        self.api_key_button = QPushButton("Clé API")
+        self.api_key_button = QPushButton(tr("main_window.api_key_button"))
         self.api_key_button.clicked.connect(self._on_edit_api_key)
         header.addWidget(self.api_key_button)
         layout.addLayout(header)
+
+        # Rappel discret mais permanent : la langue de l'UI détermine aussi la
+        # langue dans laquelle Gemini rédige la fiche, ce qui n'est pas évident
+        # pour l'utilisateur sans cette précision explicite.
+        output_language_row = QHBoxLayout()
+        output_language_row.addStretch()
+        self.output_language_hint_label = QLabel(tr("main_window.output_language_hint"))
+        self.output_language_hint_label.setStyleSheet("color: #888; font-size: 11px; font-style: italic;")
+        output_language_row.addWidget(self.output_language_hint_label)
+        layout.addLayout(output_language_row)
 
         # Discret et masqué par défaut : n'apparaît que si une vérification
         # au démarrage détecte réellement une version plus récente sur
@@ -675,12 +750,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.drop_zone)
 
         file_row = QHBoxLayout()
-        self.file_label = QLabel("Aucun fichier sélectionné")
+        self.file_label = QLabel(tr("main_window.no_file_selected"))
         self.file_label.setStyleSheet("color: #555;")
         file_row.addWidget(self.file_label)
         file_row.addStretch()
 
-        self.remove_file_button = QPushButton("✕ Retirer")
+        self.remove_file_button = QPushButton(tr("main_window.remove_file_button"))
         self.remove_file_button.setCursor(Qt.PointingHandCursor)
         self.remove_file_button.setStyleSheet(
             """
@@ -700,7 +775,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(file_row)
 
         action_row = QHBoxLayout()
-        self.summarize_button = QPushButton("Résumer")
+        self.summarize_button = QPushButton(tr("main_window.summarize_button"))
         self.summarize_button.setMinimumHeight(36)
         self.summarize_button.clicked.connect(self._on_summarize_clicked)
         action_row.addWidget(self.summarize_button)
@@ -716,9 +791,7 @@ class MainWindow(QMainWindow):
         # texte en trop après le premier objet JSON exploité (cas rare d'une
         # réponse mal formée). Ce texte peut être légitime, ce n'est pas à
         # l'application de décider silencieusement qu'il ne sert à rien.
-        self.extra_text_label = QLabel(
-            '<a href="#">ℹ️ Du contenu supplémentaire généré par Gemini a été ignoré, cliquez pour le consulter</a>'
-        )
+        self.extra_text_label = QLabel(tr("main_window.extra_text_label"))
         self.extra_text_label.setStyleSheet("color: #a06a00; font-size: 12px;")
         self.extra_text_label.setWordWrap(True)
         self.extra_text_label.setTextFormat(Qt.RichText)
@@ -735,14 +808,11 @@ class MainWindow(QMainWindow):
         self.quota_label.setAlignment(Qt.AlignCenter)
         quota_block.addWidget(self.quota_label)
 
-        quota_disclaimer = QLabel(
-            "Ces compteurs sont des estimations locales à cette application. "
-            "Ils seront faussés si la même clé API est aussi utilisée ailleurs en parallèle."
-        )
-        quota_disclaimer.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
-        quota_disclaimer.setWordWrap(True)
-        quota_disclaimer.setAlignment(Qt.AlignCenter)
-        quota_block.addWidget(quota_disclaimer)
+        self.quota_disclaimer_label = QLabel(tr("main_window.quota_disclaimer"))
+        self.quota_disclaimer_label.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
+        self.quota_disclaimer_label.setWordWrap(True)
+        self.quota_disclaimer_label.setAlignment(Qt.AlignCenter)
+        quota_block.addWidget(self.quota_disclaimer_label)
 
         layout.addLayout(quota_block)
 
@@ -763,21 +833,21 @@ class MainWindow(QMainWindow):
         result_row = QHBoxLayout()
         result_row.addStretch()
 
-        self.load_report_button = QPushButton("Charger une fiche")
+        self.load_report_button = QPushButton(tr("main_window.load_report_button"))
         self.load_report_button.clicked.connect(self._on_load_report_clicked)
         result_row.addWidget(self.load_report_button)
 
-        self.save_report_button = QPushButton("Sauvegarder la fiche")
+        self.save_report_button = QPushButton(tr("main_window.save_report_button"))
         self.save_report_button.setEnabled(False)
         self.save_report_button.clicked.connect(self._on_save_report_clicked)
         result_row.addWidget(self.save_report_button)
 
-        self.close_report_button = QPushButton("Fermer la fiche")
+        self.close_report_button = QPushButton(tr("main_window.close_report_button"))
         self.close_report_button.setEnabled(False)
         self.close_report_button.clicked.connect(self._on_close_report_clicked)
         result_row.addWidget(self.close_report_button)
 
-        self.save_button = QPushButton("Exporter en .pdf")
+        self.save_button = QPushButton(tr("main_window.export_pdf_button"))
         self.save_button.setEnabled(False)
         self.save_button.clicked.connect(self._on_save_clicked)
         result_row.addWidget(self.save_button)
@@ -794,7 +864,7 @@ class MainWindow(QMainWindow):
 
         footer_row = QHBoxLayout()
         footer_row.setContentsMargins(0, -10, 0, 0)
-        self.footer_button = QPushButton("Copyright 2026 Bruno Aublet - Licence GNU GPL v3")
+        self.footer_button = QPushButton(tr("main_window.footer_button"))
         self.footer_button.setCursor(Qt.PointingHandCursor)
         self.footer_button.setStyleSheet(
             """
@@ -826,7 +896,7 @@ class MainWindow(QMainWindow):
         self.cover_label.setFixedSize(220, 320)
         self.cover_label.setAlignment(Qt.AlignCenter)
         self.cover_label.setStyleSheet("border: 1px solid #ccc; background-color: #f0f0f0;")
-        self.cover_label.setText("Pas de couverture")
+        self.cover_label.setText(tr("main_window.no_cover"))
         cover_row = QHBoxLayout()
         cover_row.addStretch()
         cover_row.addWidget(self.cover_label)
@@ -855,23 +925,21 @@ class MainWindow(QMainWindow):
         tab_layout.addWidget(self.book_author_input)
 
         tab_layout.addStretch()
-        self.result_tabs.addTab(tab, "Couverture")
+        self.result_tabs.addTab(tab, tr("main_window.tab_cover"))
 
     def _build_summary_tab(self) -> None:
         self.summary_view = QTextEdit()
         self.summary_view.setStyleSheet("font-size: 15px;")
-        self.summary_view.setPlaceholderText("Le résumé court en français apparaîtra ici après traitement.")
+        self.summary_view.setPlaceholderText(tr("main_window.summary_placeholder"))
         self.summary_view.textChanged.connect(self._on_result_edited)
-        self.result_tabs.addTab(self.summary_view, "Résumé court")
+        self.result_tabs.addTab(self.summary_view, tr("main_window.tab_summary"))
 
     def _build_detailed_summary_tab(self) -> None:
         self.detailed_summary_view = QTextEdit()
         self.detailed_summary_view.setStyleSheet("font-size: 15px;")
-        self.detailed_summary_view.setPlaceholderText(
-            "Le résumé détaillé en français apparaîtra ici après traitement."
-        )
+        self.detailed_summary_view.setPlaceholderText(tr("main_window.detailed_summary_placeholder"))
         self.detailed_summary_view.textChanged.connect(self._on_result_edited)
-        self.result_tabs.addTab(self.detailed_summary_view, "Résumé détaillé")
+        self.result_tabs.addTab(self.detailed_summary_view, tr("main_window.tab_detailed_summary"))
 
     def _build_characters_tab(self) -> None:
         self.character_name_inputs: list[QLineEdit] = []
@@ -887,21 +955,19 @@ class MainWindow(QMainWindow):
         self.characters_layout.addStretch()
         scroll.setWidget(container)
 
-        self.characters_placeholder = QLabel(
-            "Les fiches des personnages principaux apparaîtront ici après traitement."
-        )
+        self.characters_placeholder = QLabel(tr("main_window.characters_placeholder"))
         self.characters_placeholder.setStyleSheet("color: #888; font-size: 15px;")
         self.characters_placeholder.setWordWrap(True)
         self.characters_layout.insertWidget(0, self.characters_placeholder)
 
-        self.result_tabs.addTab(scroll, "Personnages")
+        self.result_tabs.addTab(scroll, tr("main_window.tab_characters"))
 
     def _build_analysis_tab(self) -> None:
         self.analysis_view = QTextEdit()
         self.analysis_view.setStyleSheet("font-size: 15px;")
-        self.analysis_view.setPlaceholderText("L'analyse littéraire apparaîtra ici après traitement.")
+        self.analysis_view.setPlaceholderText(tr("main_window.analysis_placeholder"))
         self.analysis_view.textChanged.connect(self._on_result_edited)
-        self.result_tabs.addTab(self.analysis_view, "Analyse")
+        self.result_tabs.addTab(self.analysis_view, tr("main_window.tab_analysis"))
 
     def _clear_characters_tab(self) -> None:
         while self.characters_layout.count() > 1:  # garder le stretch final
@@ -916,7 +982,7 @@ class MainWindow(QMainWindow):
         self.character_name_inputs = []
         self.character_description_inputs = []
         if not characters:
-            placeholder = QLabel("Aucun personnage principal identifié.")
+            placeholder = QLabel(tr("main_window.no_characters"))
             placeholder.setStyleSheet("color: #888; padding: 12px;")
             self.characters_layout.insertWidget(0, placeholder)
             return
@@ -973,14 +1039,15 @@ class MainWindow(QMainWindow):
         if dialog.exec_() == QDialog.Accepted:
             api_key = dialog.api_key()
             if not api_key:
-                QMessageBox.warning(self, "Clé API manquante", "Veuillez saisir une clé API valide.")
+                QMessageBox.warning(
+                    self, tr("api_key_dialog.missing_key_title"), tr("api_key_dialog.missing_key_message")
+                )
                 return None
             if not config.save_api_key(api_key):
                 QMessageBox.critical(
                     self,
-                    "Erreur d'enregistrement",
-                    "Impossible d'enregistrer la clé API : le Gestionnaire d'identification "
-                    "Windows est indisponible.",
+                    tr("api_key_dialog.save_error_title"),
+                    tr("api_key_dialog.save_error_message"),
                 )
                 return None
             return api_key
@@ -990,13 +1057,17 @@ class MainWindow(QMainWindow):
         self._prompt_for_api_key()
 
     def _on_edit_prompts(self) -> None:
-        current_prompts = load_custom_prompts(config.get_settings_dir())
+        current_prompts = load_custom_prompts(i18n.current_language())
         dialog = PromptsDialog(self, current_prompts=current_prompts)
         if dialog.exec_() == QDialog.Accepted:
             try:
-                save_custom_prompts(config.get_settings_dir(), dialog.prompts())
+                save_custom_prompts(i18n.current_language(), dialog.prompts())
             except OSError as exc:
-                QMessageBox.critical(self, "Erreur de sauvegarde", f"Impossible d'enregistrer les prompts : {exc}")
+                QMessageBox.critical(
+                    self,
+                    tr("prompts_dialog.save_error_title"),
+                    tr("prompts_dialog.save_error_message", error=exc),
+                )
 
     def _on_edit_quota_limits(self) -> None:
         snapshot = self.quota_tracker.snapshot()
@@ -1012,7 +1083,9 @@ class MainWindow(QMainWindow):
                 save_quota_limits(config.get_settings_dir(), rpm_limit, tpm_limit, rpd_limit)
             except OSError as exc:
                 QMessageBox.critical(
-                    self, "Erreur de sauvegarde", f"Impossible d'enregistrer les limites de quota : {exc}"
+                    self,
+                    tr("quota_limits_dialog.save_error_title"),
+                    tr("quota_limits_dialog.save_error_message", error=exc),
                 )
                 return
             self.quota_tracker.reload_limits()
@@ -1022,10 +1095,8 @@ class MainWindow(QMainWindow):
         LicenseDialog(self).exec_()
 
     def show_update_banner(self, latest_version: str) -> None:
-        self.update_banner_label.setText(
-            f'<a href="#">🆕 Une nouvelle version de Distillat est disponible '
-            f"(v{latest_version}), cliquez pour la télécharger</a>"
-        )
+        self._latest_version_available = latest_version
+        self.update_banner_label.setText(tr("main_window.update_banner", version=latest_version))
         self.update_banner_label.show()
 
     def _on_open_releases_page(self) -> None:
@@ -1054,7 +1125,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard_unsaved_report():
             return
         self.selected_book_path = path
-        self.file_label.setText(f"Fichier sélectionné : {os.path.basename(path)}")
+        self.file_label.setText(tr("main_window.file_selected", filename=os.path.basename(path)))
         self.remove_file_button.show()
         self._set_summarize_button_enabled(True)
         self.save_button.setEnabled(False)
@@ -1072,7 +1143,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard_unsaved_report():
             return
         self.selected_book_path = None
-        self.file_label.setText("Aucun fichier sélectionné")
+        self.file_label.setText(tr("main_window.no_file_selected"))
         self.remove_file_button.hide()
         self._set_summarize_button_enabled(False)
         self.save_button.setEnabled(False)
@@ -1109,18 +1180,22 @@ class MainWindow(QMainWindow):
 
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Question)
-        box.setWindowTitle("Fiche non sauvegardée")
-        box.setText(
-            "La fiche actuelle n'a pas été sauvegardée. Voulez-vous continuer sans sauvegarder ?"
-        )
+        box.setWindowTitle(tr("main_window.unsaved_report_dialog.window_title"))
+        box.setText(tr("main_window.unsaved_report_dialog.text"))
 
-        discard_button = box.addButton("Oui : perdre les modifications", QMessageBox.YesRole)
+        discard_button = box.addButton(
+            tr("main_window.unsaved_report_dialog.discard_button"), QMessageBox.YesRole
+        )
         discard_button.setStyleSheet(
             "background-color: #d9362e; color: white; font-weight: bold;"
         )
-        cancel_button = box.addButton("Non : retour à la fiche", QMessageBox.RejectRole)
+        cancel_button = box.addButton(
+            tr("main_window.unsaved_report_dialog.cancel_button"), QMessageBox.RejectRole
+        )
         cancel_button.setStyleSheet("background-color: #9aa5b1; color: white;")
-        save_button = box.addButton("Non : sauvegarder et fermer la fiche", QMessageBox.ActionRole)
+        save_button = box.addButton(
+            tr("main_window.unsaved_report_dialog.save_button"), QMessageBox.ActionRole
+        )
         save_button.setStyleSheet(
             "background-color: #2ea04f; color: white; font-weight: bold;"
         )
@@ -1193,17 +1268,17 @@ class MainWindow(QMainWindow):
 
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Question)
-        box.setWindowTitle("Génération en cours")
-        box.setText(
-            "Une génération est en cours. Voulez-vous vraiment quitter ?\n"
-            "La fiche en cours de génération sera perdue (le quota Gemini déjà "
-            "consommé ne sera pas restitué)."
+        box.setWindowTitle(tr("main_window.abort_generation_dialog.window_title"))
+        box.setText(tr("main_window.abort_generation_dialog.text"))
+        quit_button = box.addButton(
+            tr("main_window.abort_generation_dialog.quit_button"), QMessageBox.YesRole
         )
-        quit_button = box.addButton("Oui : quitter", QMessageBox.YesRole)
         quit_button.setStyleSheet(
             "background-color: #d9362e; color: white; font-weight: bold;"
         )
-        stay_button = box.addButton("Non : laisser la génération se terminer", QMessageBox.RejectRole)
+        stay_button = box.addButton(
+            tr("main_window.abort_generation_dialog.stay_button"), QMessageBox.RejectRole
+        )
         stay_button.setStyleSheet("background-color: #9aa5b1; color: white;")
         box.setDefaultButton(stay_button)
         box.exec_()
@@ -1254,14 +1329,20 @@ class MainWindow(QMainWindow):
         if resume_state is not None and resume_state.book_path == self.selected_book_path:
             resume_box = QMessageBox(self)
             resume_box.setIcon(QMessageBox.Question)
-            resume_box.setWindowTitle("Reprendre la génération interrompue ?")
+            resume_box.setWindowTitle(tr("main_window.resume_dialog.window_title"))
             resume_box.setText(
-                f"Une génération précédente pour ce livre s'était arrêtée après "
-                f"{resume_state.batches_done}/{resume_state.batches_total} lot(s) de chapitres "
-                f"résumé(s) avec succès.\n\nReprendre à partir de là (recommandé), ou repartir de zéro ?"
+                tr(
+                    "main_window.resume_dialog.text",
+                    batches_done=resume_state.batches_done,
+                    batches_total=resume_state.batches_total,
+                )
             )
-            resume_button = resume_box.addButton("Reprendre", QMessageBox.AcceptRole)
-            restart_button = resume_box.addButton("Repartir de zéro", QMessageBox.RejectRole)
+            resume_button = resume_box.addButton(
+                tr("main_window.resume_dialog.resume_button"), QMessageBox.AcceptRole
+            )
+            restart_button = resume_box.addButton(
+                tr("main_window.resume_dialog.restart_button"), QMessageBox.RejectRole
+            )
             resume_box.setDefaultButton(resume_button)
             resume_box.exec_()
             if resume_box.clickedButton() is restart_button:
@@ -1295,7 +1376,7 @@ class MainWindow(QMainWindow):
         self.extra_text_label.hide()
         self._clear_result_tabs()
 
-        self._last_progress_message = "Démarrage du traitement…"
+        self._last_progress_message = tr("main_window.starting_status")
         self._elapsed_seconds = 0
         self.status_label.setStyleSheet("color: #555;")
         self._render_status_with_elapsed()
@@ -1313,12 +1394,14 @@ class MainWindow(QMainWindow):
     def _format_duration(total_seconds: int) -> str:
         minutes, seconds = divmod(max(total_seconds, 0), 60)
         if minutes:
-            return f"{minutes} min {seconds:02d} s"
-        return f"{seconds} s"
+            return tr("main_window.duration_minutes", minutes=minutes, seconds=seconds)
+        return tr("main_window.duration_seconds", seconds=seconds)
 
     def _render_status_with_elapsed(self) -> None:
         elapsed = self._format_duration(self._elapsed_seconds)
-        self.status_label.setText(f"{self._last_progress_message} (écoulé : {elapsed})")
+        self.status_label.setText(
+            tr("main_window.elapsed_suffix", message=self._last_progress_message, elapsed=elapsed)
+        )
 
     def _on_elapsed_tick(self) -> None:
         self._elapsed_seconds += 1
@@ -1332,13 +1415,18 @@ class MainWindow(QMainWindow):
 
     def _update_quota_display(self, snapshot: QuotaSnapshot) -> None:
         self.quota_label.setText(
-            f"Tokens - entrée : {snapshot.input_tokens_total:,} · "
-            f"sortie : {snapshot.output_tokens_total:,} · "
-            f"total : {snapshot.input_tokens_total + snapshot.output_tokens_total:,}\n"
-            f"Requêtes/minute : {snapshot.requests_per_minute}/{snapshot.rpm_limit} · "
-            f"Tokens/minute : {snapshot.tokens_per_minute:,}/{snapshot.tpm_limit:,} · "
-            f"Requêtes/jour : {snapshot.requests_today}/{snapshot.rpd_limit}"
-            .replace(",", " ")
+            tr(
+                "main_window.quota_display",
+                input_tokens=f"{snapshot.input_tokens_total:,}".replace(",", " "),
+                output_tokens=f"{snapshot.output_tokens_total:,}".replace(",", " "),
+                total_tokens=f"{snapshot.input_tokens_total + snapshot.output_tokens_total:,}".replace(",", " "),
+                rpm=snapshot.requests_per_minute,
+                rpm_limit=snapshot.rpm_limit,
+                tpm=f"{snapshot.tokens_per_minute:,}".replace(",", " "),
+                tpm_limit=f"{snapshot.tpm_limit:,}".replace(",", " "),
+                rpd=snapshot.requests_today,
+                rpd_limit=snapshot.rpd_limit,
+            )
         )
         self._check_quota_thresholds(snapshot)
 
@@ -1346,18 +1434,23 @@ class MainWindow(QMainWindow):
         warnings = []
         if snapshot.requests_today >= snapshot.rpd_limit * self.QUOTA_WARNING_THRESHOLD:
             warnings.append(
-                f"{snapshot.requests_today}/{snapshot.rpd_limit} requêtes utilisées aujourd'hui"
+                tr("main_window.quota_threshold_rpd", used=snapshot.requests_today, limit=snapshot.rpd_limit)
             )
         if snapshot.requests_per_minute >= snapshot.rpm_limit * self.QUOTA_WARNING_THRESHOLD:
             warnings.append(
-                f"{snapshot.requests_per_minute}/{snapshot.rpm_limit} requêtes sur la minute en cours"
+                tr(
+                    "main_window.quota_threshold_rpm",
+                    used=snapshot.requests_per_minute,
+                    limit=snapshot.rpm_limit,
+                )
             )
         if snapshot.tokens_per_minute >= snapshot.tpm_limit * self.QUOTA_WARNING_THRESHOLD:
-            tpm_text = f"{snapshot.tokens_per_minute:,}/{snapshot.tpm_limit:,} tokens sur la minute en cours"
-            warnings.append(tpm_text.replace(",", " "))
+            tpm_used = f"{snapshot.tokens_per_minute:,}".replace(",", " ")
+            tpm_limit = f"{snapshot.tpm_limit:,}".replace(",", " ")
+            warnings.append(tr("main_window.quota_threshold_tpm", used=tpm_used, limit=tpm_limit))
 
         if warnings:
-            new_text = "⚠️ Quota bientôt atteint : " + " · ".join(warnings)
+            new_text = tr("main_window.quota_threshold_prefix") + " · ".join(warnings)
             if self.quota_threshold_label.text() != new_text:
                 self.quota_threshold_label.setText(new_text)
             if self.quota_threshold_label.isHidden():
@@ -1369,12 +1462,12 @@ class MainWindow(QMainWindow):
         self.book_title_input.setText("")
         self.book_author_input.setText("")
         self.cover_label.clear()
-        self.cover_label.setText("Pas de couverture")
+        self.cover_label.setText(tr("main_window.no_cover"))
         self.summary_view.clear()
         self.detailed_summary_view.clear()
         self.analysis_view.clear()
         self._clear_characters_tab()
-        placeholder = QLabel("Les fiches des personnages principaux apparaîtront ici après traitement.")
+        placeholder = QLabel(tr("main_window.characters_placeholder"))
         placeholder.setStyleSheet("color: #888; padding: 12px;")
         placeholder.setWordWrap(True)
         self.characters_layout.insertWidget(0, placeholder)
@@ -1393,7 +1486,7 @@ class MainWindow(QMainWindow):
         self.summary_view.setMarkdown(_to_display_markdown(result.summary_text))
         self.detailed_summary_view.setMarkdown(
             _to_display_markdown(
-                result.detailed_summary_text or "Aucun résumé détaillé disponible pour cette fiche."
+                result.detailed_summary_text or tr("main_window.no_detailed_summary")
             )
         )
         self.analysis_view.setMarkdown(_to_display_markdown(result.analysis_text))
@@ -1425,9 +1518,9 @@ class MainWindow(QMainWindow):
                     )
                 )
             else:
-                self.cover_label.setText("Pas de couverture")
+                self.cover_label.setText(tr("main_window.no_cover"))
         else:
-            self.cover_label.setText("Pas de couverture")
+            self.cover_label.setText(tr("main_window.no_cover"))
 
     def _on_finished_ok(self, result: BookReport) -> None:
         self._elapsed_timer.stop()
@@ -1440,13 +1533,13 @@ class MainWindow(QMainWindow):
         self._display_book_report(result)
         self.result_tabs.setCurrentIndex(0)
         mode = (
-            f"Résumé consolidé à partir de {result.chapter_count} chapitres."
+            tr("main_window.mode_split", chapter_count=result.chapter_count)
             if result.was_split
-            else "Résumé produit en une seule requête."
+            else tr("main_window.mode_single")
         )
         duration = self._format_duration(self._elapsed_seconds)
         self.status_label.setStyleSheet("color: #2ea04f; font-weight: bold;")
-        self.status_label.setText(f"Terminé en {duration}. {mode}")
+        self.status_label.setText(tr("main_window.finished_status", duration=duration, mode=mode))
         if result.extra_generated_text:
             self.extra_text_label.show()
         else:
@@ -1464,51 +1557,36 @@ class MainWindow(QMainWindow):
         # après un traitement long, bien que les données soient à jour en mémoire).
         self.repaint()
 
-    def _on_failed(self, error_message: str) -> None:
+    def _on_failed(self, error_message: str, error_kind: str | None) -> None:
         self._elapsed_timer.stop()
         duration = self._format_duration(self._elapsed_seconds)
         self.status_label.setStyleSheet("color: #b02a2a; font-weight: bold;")
-        self.status_label.setText(f"Échec après {duration}.")
+        self.status_label.setText(tr("main_window.failed_status", duration=duration))
         self._set_summarize_button_enabled(True)
         self.load_report_button.setEnabled(True)
         self.prompts_button.setEnabled(True)
         self.drop_zone.set_busy(False)
-        if "quota" in error_message.lower():
-            self.quota_warning_label.setText(
-                "🚫 Quota Gemini dépassé, l'appli ne peut plus faire de requêtes pour l'instant. "
-                "Réessayez plus tard (le quota par minute se réinitialise en 60 s, "
-                "le quota journalier à minuit)."
-            )
+        if error_kind in ("daily_quota", "rate_quota"):
+            self.quota_warning_label.setText(tr("main_window.quota_exceeded_warning"))
             self.quota_warning_label.show()
         resume_state = generation_resume.load_resume_state(config.get_settings_dir())
         if resume_state is not None and resume_state.book_path == self.selected_book_path:
-            if "quota journalier" in error_message.lower():
-                wait_hint = (
-                    "C'est le quota JOURNALIER (nombre de requêtes/jour) qui est épuisé : il ne se "
-                    "réinitialise qu'à minuit, il faudra donc attendre demain avant de pouvoir reprendre. "
-                    "Une fois ce délai passé, "
-                )
-            elif "quota" in error_message.lower():
-                wait_hint = (
-                    "C'est le quota PAR MINUTE (requêtes ou tokens/minute) qui est temporairement dépassé : "
-                    "il se libère de lui-même en général en moins de 2 minutes. Une fois ce délai passé, "
-                )
+            if error_kind == "daily_quota":
+                wait_hint = tr("main_window.resume_wait_hint_daily")
+            elif error_kind == "rate_quota":
+                wait_hint = tr("main_window.resume_wait_hint_minute")
             else:
                 # Pas un problème de quota (ex : réponse mal formée renvoyée par Gemini,
                 # aléa ponctuel) : aucun délai à attendre, un nouvel essai peut suffire
                 # immédiatement, contrairement aux cas de quota traités ci-dessus.
-                wait_hint = (
-                    "Ce n'est pas un problème de quota : rien à attendre, il s'agit probablement d'un "
-                    "aléa ponctuel de génération. Vous pouvez réessayer tout de suite, "
-                )
-            error_message += (
-                f"\n\nRien n'est perdu : les {resume_state.batches_done}/{resume_state.batches_total} "
-                f"lot(s) de chapitres déjà résumés avec succès ont été sauvegardés. {wait_hint}"
-                "glissez-déposez à nouveau ce même fichier EPUB/PDF et cliquez sur \"Résumer\" : "
-                "Distillat reconnaîtra automatiquement où le traitement s'était arrêté et proposera de "
-                "reprendre exactement à partir de là, sans refaire le travail déjà fait."
+                wait_hint = tr("main_window.resume_wait_hint_other")
+            error_message += tr(
+                "main_window.resume_hint_suffix",
+                batches_done=resume_state.batches_done,
+                batches_total=resume_state.batches_total,
+                wait_hint=wait_hint,
             )
-        QMessageBox.critical(self, "Erreur", error_message)
+        QMessageBox.critical(self, tr("main_window.error_title"), error_message)
 
     def _default_save_dir(self) -> Path:
         """Dossier proposé par défaut à l'enregistrement d'une fiche : celui
@@ -1534,7 +1612,7 @@ class MainWindow(QMainWindow):
         base_name = self._last_result_source_stem or self.last_result.book_title
         default_path = str(self._default_pdf_dir() / f"{sanitize_filename(base_name)}.pdf")
         path, _ = QFileDialog.getSaveFileName(
-            self, "Enregistrer le résumé", default_path, "Documents PDF (*.pdf)"
+            self, tr("main_window.save_pdf_dialog_title"), default_path, tr("main_window.save_pdf_filter")
         )
         if not path:
             return
@@ -1544,9 +1622,11 @@ class MainWindow(QMainWindow):
         try:
             export_book_report_to_pdf(self.last_result, path)
             config.save_last_pdf_dir(Path(path).parent)
-            QMessageBox.information(self, "Sauvegarde réussie", f"Document enregistré :\n{path}")
+            QMessageBox.information(
+                self, tr("main_window.save_success_title"), tr("main_window.pdf_saved_message", path=path)
+            )
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Erreur de sauvegarde", str(exc))
+            QMessageBox.critical(self, tr("main_window.save_error_title"), str(exc))
 
     def _on_save_report_clicked(self) -> bool:
         """Retourne True si la fiche a bien été sauvegardée (False si annulé
@@ -1567,9 +1647,9 @@ class MainWindow(QMainWindow):
         # AUTRE fichier existant.
         path, _ = QFileDialog.getSaveFileName(
             self,
-            "Enregistrer la fiche",
+            tr("main_window.save_report_dialog_title"),
             default_path,
-            "Fiches Distillat (*.json)",
+            tr("main_window.save_report_filter"),
             options=QFileDialog.DontConfirmOverwrite,
         )
         if not path:
@@ -1586,10 +1666,10 @@ class MainWindow(QMainWindow):
         if target.exists() and not overwrites_source:
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Question)
-            box.setWindowTitle("Fichier existant")
-            box.setText(f"Le fichier existe déjà :\n{path}\n\nVoulez-vous le remplacer ?")
-            yes_button = box.addButton("Oui", QMessageBox.YesRole)
-            no_button = box.addButton("Non", QMessageBox.NoRole)
+            box.setWindowTitle(tr("main_window.existing_file_title"))
+            box.setText(tr("main_window.existing_file_message", path=path))
+            yes_button = box.addButton(tr("main_window.yes"), QMessageBox.YesRole)
+            no_button = box.addButton(tr("main_window.no"), QMessageBox.NoRole)
             box.setDefaultButton(no_button)
             box.exec_()
             if box.clickedButton() is not yes_button:
@@ -1603,13 +1683,15 @@ class MainWindow(QMainWindow):
             config.save_last_report_dir(target.parent)
             if overwrites_source:
                 QMessageBox.information(
-                    self, "Sauvegarde réussie", "La fiche a été correctement modifiée."
+                    self, tr("main_window.save_success_title"), tr("main_window.report_overwritten_message")
                 )
             else:
-                QMessageBox.information(self, "Sauvegarde réussie", f"Fiche enregistrée :\n{path}")
+                QMessageBox.information(
+                    self, tr("main_window.save_success_title"), tr("main_window.report_saved_message", path=path)
+                )
             return True
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Erreur de sauvegarde", str(exc))
+            QMessageBox.critical(self, tr("main_window.save_error_title"), str(exc))
             return False
 
     def _on_load_report_clicked(self) -> None:
@@ -1617,7 +1699,7 @@ class MainWindow(QMainWindow):
             return
         default_dir = config.load_last_report_dir() or config.get_reports_dir()
         path, _ = QFileDialog.getOpenFileName(
-            self, "Charger une fiche", str(default_dir), "Fiches Distillat (*.json)"
+            self, tr("main_window.load_report_dialog_title"), str(default_dir), tr("main_window.load_report_filter")
         )
         if not path:
             return
@@ -1637,7 +1719,9 @@ class MainWindow(QMainWindow):
         # corrompue ou modifiée à la main plantait l'application au lieu
         # d'afficher ce message d'erreur.
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            QMessageBox.critical(self, "Erreur de chargement", f"Fichier illisible : {exc}")
+            QMessageBox.critical(
+                self, tr("main_window.load_error_title"), tr("main_window.load_error_message", error=exc)
+            )
             return
 
         self.last_result = result
@@ -1646,7 +1730,7 @@ class MainWindow(QMainWindow):
         self._report_dirty = False
         config.save_last_report_dir(self._last_report_source_path.parent)
         self._display_book_report(result)
-        self.status_label.setText(f"Fiche chargée depuis {os.path.basename(path)}.")
+        self.status_label.setText(tr("main_window.report_loaded_status", filename=os.path.basename(path)))
         self.extra_text_label.hide()
         self.save_button.setEnabled(True)
         self.save_report_button.setEnabled(True)

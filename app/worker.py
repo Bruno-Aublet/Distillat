@@ -6,8 +6,9 @@ from PyQt5.QtCore import QThread, pyqtSignal
 from app import config, epub_parser, gemini_client, generation_resume, pdf_parser
 from app.book_report import BookReport
 from app.epub_parser import BookContent
-from app.gemini_client import PartialGenerationError
+from app.gemini_client import GeminiError, PartialGenerationError
 from app.generation_resume import ResumeState
+from app.i18n import tr
 from app.quota_tracker import QuotaSnapshot, QuotaTracker
 
 
@@ -22,7 +23,11 @@ class SummarizeWorker(QThread):
     progress = pyqtSignal(int, int, str)
     quota_updated = pyqtSignal(object)  # QuotaSnapshot
     finished_ok = pyqtSignal(object)  # BookReport
-    failed = pyqtSignal(str)
+    # error_kind ("daily_quota"/"rate_quota"/None) : indépendant de la langue
+    # du message, pour que main_window puisse adapter son comportement (ex :
+    # proposer une reprise) sans jamais chercher un mot-clé dans le message
+    # traduit, ce qui casserait selon la langue de l'UI.
+    failed = pyqtSignal(str, object)
 
     def __init__(
         self,
@@ -41,7 +46,7 @@ class SummarizeWorker(QThread):
     def run(self) -> None:
         settings_dir = config.get_settings_dir()
         try:
-            self.progress.emit(0, 1, "Lecture du fichier…")
+            self.progress.emit(0, 1, tr("worker_progress.reading_file"))
             content = parse_book(self.book_path)
 
             gemini_client.configure(self.api_key)
@@ -66,7 +71,6 @@ class SummarizeWorker(QThread):
                 quota_tracker=self.quota_tracker,
                 on_progress=on_progress,
                 on_quota_update=on_quota_update,
-                settings_dir=settings_dir,
                 resume_chapter_summaries=resume_summaries,
                 resume_batches_done=resume_batches_done,
             )
@@ -83,6 +87,8 @@ class SummarizeWorker(QThread):
                     batches_total=exc.batches_total,
                 ),
             )
-            self.failed.emit(str(exc))
+            self.failed.emit(str(exc), exc.error_kind)
+        except GeminiError as exc:
+            self.failed.emit(str(exc), exc.error_kind)
         except Exception as exc:  # noqa: BLE001 - on veut afficher toute erreur à l'utilisateur
-            self.failed.emit(str(exc))
+            self.failed.emit(str(exc), None)

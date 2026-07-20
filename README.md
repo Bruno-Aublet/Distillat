@@ -1,3 +1,5 @@
+**Français** | [English](#english)
+
 # Distillat
 
 **Le tome 8 de votre saga préférée vient de sortir, et vous mourez d'envie de
@@ -16,11 +18,13 @@ L'application s'appuie sur le palier gratuit de Gemini 3.5 Flash.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.1.1**
+**Version 1.2.0**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
-complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, en
-français, via l'API Gemini (gratuite).
+complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
+l'API Gemini (gratuite). L'interface et la langue des fiches générées sont
+disponibles en français et en anglais (voir
+[Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches)).
 
 Le numéro de version s'affiche dans le titre de la fenêtre et dans les
 propriétés Windows de l'exécutable (clic droit sur `Distillat.exe` >
@@ -79,7 +83,9 @@ ou en ligne : ne le trouverez pas, il n'a jamais existé.
      déjà résumés avec succès sont conservés : redéposer le même fichier et
      cliquer de nouveau sur **Résumer** propose de reprendre exactement là où
      le traitement s'était arrêté, sans reformuler ce qui a déjà été obtenu.
-4. Le résultat (toujours en français, quelle que soit la langue du livre)
+4. Le résultat (toujours dans la langue actuellement choisie pour
+   l'interface, quelle que soit la langue du livre - voir
+   [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches))
    s'affiche dans 5 onglets : **Couverture** (image, titre, auteur),
    **Résumé court** (deux à trois paragraphes maximum), **Résumé
    détaillé** (au moins 1500 mots, structuré par partie, bien davantage pour
@@ -116,7 +122,28 @@ Le bouton **Prompts** ouvre une fenêtre permettant de consulter et, si
 souhaité, de modifier les prompts envoyés à Gemini (un par cas de figure
 décrit ci-dessus), chacun réinitialisable indépendamment des autres. Ils
 fonctionnent tels quels : les modifier reste possible mais à vos risques et
-périls, comme le rappelle un avertissement dans la fenêtre.
+périls, comme le rappelle un avertissement dans la fenêtre. Un prompt
+personnalisé est enregistré séparément pour chaque langue de l'interface :
+le modifier en français n'affecte jamais sa version anglaise, et inversement.
+
+## Langue de l'interface et des fiches
+
+Un sélecteur dans l'en-tête permet de basculer l'interface entre français et
+anglais, sans redémarrage. Au tout premier démarrage, la langue est déterminée
+par la langue du système Windows : français si le système est en français,
+anglais dans tous les autres cas (y compris pour une langue système ni
+française ni anglaise). Ce choix peut ensuite être modifié à tout moment via
+le sélecteur ; il persiste au redémarrage de l'application
+(`%APPDATA%\Distillat\settings.json`, voir
+[Emplacement des fichiers](#emplacement-des-fichiers)).
+
+La langue choisie détermine aussi la langue dans laquelle Gemini rédige la
+fiche (résumés, personnages, analyse) : un rappel discret apparaît sous le
+sélecteur pour l'indiquer clairement. Une fiche déjà générée reste affichée
+dans sa langue d'origine, indépendamment d'un changement ultérieur de la
+langue de l'interface : ce n'est pas un bug, une fiche n'est jamais retraduite
+automatiquement (ce qui nécessiterait un nouvel appel à l'API Gemini, donc du
+quota supplémentaire).
 
 ## Suivi des quotas
 
@@ -207,14 +234,13 @@ lors d'une mise à jour) :
   [Sécurité de la clé API](#sécurité-de-la-clé-api)).
 - **`.quota_state.json`** (compteur de requêtes du jour), **`quota_limits.json`**
   (limites RPM/TPM/RPD personnalisées, si modifiées via le bouton **Limites de
-  quota**), **`prompts.json`** (prompts personnalisés, si modifiés via le
-  bouton **Prompts** ; absent tant qu'aucun prompt n'a été modifié),
-  **`.generation_resume.json`** (lots de chapitres déjà résumés pour une
-  génération interrompue par un échec ; absent en l'absence d'échec, supprimé
-  dès qu'une génération se termine avec succès) et **`last_dirs.json`**
-  (derniers dossiers utilisés pour une fiche et pour un export PDF, voir
-  ci-dessous ; absent tant qu'aucune sauvegarde/chargement n'a été fait) :
-  `%APPDATA%\Distillat\`.
+  quota**), **`settings.json`** (regroupe la langue de l'interface choisie, voir
+  [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches) ;
+  les prompts personnalisés par langue, si modifiés via le bouton **Prompts** ;
+  et les derniers dossiers utilisés pour une fiche et pour un export PDF, voir
+  ci-dessous) et **`.generation_resume.json`** (lots de chapitres déjà résumés
+  pour une génération interrompue par un échec ; absent en l'absence d'échec,
+  supprimé dès qu'une génération se termine avec succès) : `%APPDATA%\Distillat\`.
 - **Fiches sauvegardées** (`.distillat.json`) et **exports PDF** :
   `Documents\Distillat\Fiches\` au tout premier usage, puis le dernier dossier
   utilisé pour ce type de fichier (fiche ou PDF, mémorisés séparément) est
@@ -230,23 +256,307 @@ lors d'une mise à jour) :
   résolution alourdisse inutilement le fichier ; une fiche existante
   contenant encore une couverture surdimensionnée (créée par une version
   antérieure) est allégée automatiquement dès son prochain chargement.
-- **`LICENSE`** et **icône de l'application** (`icons/open-book_4681875.png`) :
+- **`LICENSE`**, **icône de l'application** (`icons/open-book_4681875.png`) et
+  **fichiers de traduction** (`locales/fr.json`, `locales/en.json`) :
   embarqués à la compilation (dans `_internal/`). Le `LICENSE` est accessible
   depuis le footer de l'application (« Copyright ... - Licence GNU GPL v3 »).
 
-En développement (`python main.py`), la clé API (keyring) et le dossier des
-fiches (`Documents\Distillat\Fiches\`) sont les mêmes qu'en mode compilé ;
-seuls les fichiers techniques (`.quota_state.json`, `quota_limits.json`,
-`prompts.json`, `.generation_resume.json`) restent à la racine du projet au
-lieu de `%APPDATA%\Distillat\`. Le dossier
-`Fiches/` à la racine du projet ne sert qu'à héberger la fiche d'exemple
-fournie avec le code.
+En développement (`python main.py`), tous ces emplacements sont identiques au
+mode compilé, y compris les fichiers techniques (`.quota_state.json`,
+`quota_limits.json`, `settings.json`, `.generation_resume.json`), désormais
+toujours dans `%APPDATA%\Distillat\` quel que soit le mode de lancement (pour
+que le suivi de quota reflète la même consommation réelle, peu importe la
+façon de lancer l'application). Le
+dossier `Fiches/` à la racine du projet ne sert qu'à héberger la fiche
+d'exemple fournie avec le code.
 
 Si vous mettez à jour depuis une version antérieure qui stockait ces fichiers
 à côté de l'exécutable, l'application les déplace automatiquement vers les
 nouveaux emplacements au premier lancement (sans jamais écraser un fichier
-déjà présent à la destination).
+déjà présent à la destination). De même, si vous mettez à jour depuis une
+version antérieure où `settings.json`, les prompts personnalisés et les
+derniers dossiers utilisés étaient chacun dans leur propre fichier
+(`last_dirs.json`, `prompts.json`), leur contenu est fusionné automatiquement
+dans `settings.json` au premier lancement, sans perte de données.
 
 ## Licence
 
 Ce logiciel est distribué sous licence [GNU GPL v3](LICENSE).
+
+---
+
+[Français](#distillat) | **English**
+
+<a name="english"></a>
+# Distillat
+
+**Book 8 of your favorite saga just came out, and you're dying to read it.
+Except book 7 was 4 years ago, and your memories are a bit fuzzy: who were
+those secondary characters again? And what happened at the end?**
+
+If this sounds familiar, Distillat is for you. Simply drop your EPUB or PDF
+file into the designated area: you get a summary, character sheets, and an
+analysis of the work, ready to view or export to PDF.
+
+The application relies on Gemini 3.5 Flash's free tier.
+
+**Download**: latest version on the
+[Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
+`.zip` file to download is at the bottom of the release page).
+
+**Version 1.2.0**
+
+Windows application with a PyQt5 interface to generate a complete reading
+report (summaries, characters, analysis) from an EPUB or PDF book, via the
+Gemini API (free). The interface and the language of generated reports are
+available in French and English (see
+[Interface and report language](#interface-and-report-language)).
+
+The version number is displayed in the window title and in the executable's
+Windows properties (right-click `Distillat.exe` > Properties > Details).
+Single source of truth: `app/__version__.py` (manually synchronized with
+`version_info.txt` for the .exe metadata).
+
+On each launch, the application silently checks in the background whether a
+newer version is available on the
+[Releases](https://github.com/Bruno-Aublet/Distillat/releases) page: on a
+network error or if the application is already up to date, nothing is
+shown; if an update exists, a banner appears under the header with a direct
+link to the download page.
+
+## Sample report
+
+The `Fiches/` folder contains a file named
+`FICHE TEST - Les Terres Oubliées - LIVRE FICTIF.distillat.json`, to open via
+**Load a report…** (or by dragging and dropping it into the application) to
+see what a complete result looks like (cover, short summary, detailed
+summary, characters, analysis) without having to process a real book or
+consume any Gemini quota.
+
+**⚠️ WARNING: "Les Terres Oubliées" ("The Forgotten Lands") is an entirely
+FICTIONAL book that DOES NOT EXIST.** The title, the author ("Camille
+Vasseur"), the cover, and all the content of this report were made up purely
+to demonstrate what the application produces - it is not a real book, a real
+summary, or a real author. Don't look for this book in a bookstore or
+online: you won't find it, it never existed.
+
+## How it works
+
+1. Drag and drop an `.epub`, `.pdf` file **or an already generated report**
+   (`.distillat.json`) into the designated area, or click to browse (same
+   choice). Dropping an EPUB/PDF prepares a new summary; dropping a report
+   opens it directly, same as **Load a report…**. The EPUB format generally
+   gives a better result for a book to summarize: PDF has no usable chapter
+   structure (arbitrary page-block splitting for large books). A PDF's cover
+   is obtained by rendering its first page as an image, exactly as it
+   appears on screen.
+2. Click **Summarize**. The drop zone is disabled for the entire duration of
+   processing, to avoid selecting another file or opening another report on
+   top of the summary currently in progress.
+3. The application counts the tokens of the extracted text via the Gemini
+   API:
+   - if the text fits under the free tier's rate limit (tokens per minute),
+     both summaries, the main characters, and the literary analysis are
+     generated in a single call;
+   - otherwise (large book), the text is split into batches of several
+     consecutive chapters (EPUB table of contents, or page blocks for a
+     PDF; as many chapters as possible per batch without exceeding this same
+     rate limit, to limit the number of requests), each batch is summarized
+     in one call, then a final call receives all these summaries and
+     produces, in one go, both final summaries, the main characters, and the
+     literary analysis. If a failure occurs along the way (quota reached,
+     unreadable Gemini response...), batches already summarized
+     successfully are kept: dropping the same file again and clicking
+     **Summarize** again offers to resume exactly where processing had
+     stopped, without redoing what was already obtained.
+4. The result (always in the language currently chosen for the interface,
+   regardless of the book's language - see
+   [Interface and report language](#interface-and-report-language)) is
+   displayed in 5 tabs: **Cover** (image, title, author), **Short
+   summary** (two to three paragraphs maximum), **Detailed
+   summary** (at least 1500 words, structured by part, considerably more for
+   a long novel), **Characters** (sheets for the main characters and for
+   groups or organizations central to the plot - faction, council, army...
+   - typically 3 to 20 entries depending on how rich the novel is), and
+   **Literary analysis** (at least 600 to 900 words, structured by theme,
+   style, and the work's significance).
+   These are targets given to Gemini, not strict guarantees. Section
+   headings that Gemini structures in Markdown (`#`, `##`, `###`...) are
+   displayed formatted (bold, size) without the visible tags. The content of
+   every tab is directly editable: click into a field and edit the text with
+   the keyboard (summaries, analysis, name and description of each
+   character, and the book's title as well as the author's name on the
+   Cover tab). Any edit is automatically picked up when saving (`.distillat.json`
+   report or `.pdf` export), heading tags included.
+5. Click **Export to .pdf** to export everything as a formatted PDF
+   document, or **Save the report…** to save it as a standalone JSON file
+   (`.distillat.json`) reloadable later via **Load a report…** (see
+   [File locations](#file-locations) to know where). If the displayed
+   report hasn't been saved, the application asks for confirmation before
+   replacing it (new file, new summary, dropped or loaded report, closing
+   the report or the application). Confirmation is also asked if the
+   application is closed while a generation is in progress (the report
+   being generated would be lost).
+
+The Gemini API key is requested on first launch and stored encrypted via the
+Windows Credential Manager (see
+[API key security](#api-key-security)).
+
+The **Prompts** button opens a window to view and, if desired, edit the
+prompts sent to Gemini (one per case described above), each independently
+resettable. They work as-is: editing them is possible but at your own risk,
+as a warning in the window reminds you. A custom prompt is stored separately
+for each interface language: editing it in French never affects its English
+version, and vice versa.
+
+## Interface and report language
+
+A selector in the header lets you switch the interface between French and
+English, without restarting. On the very first launch, the language is
+determined by the Windows system language: French if the system is in
+French, English in all other cases (including for a system language that is
+neither French nor English). This choice can then be changed at any time via
+the selector; it persists across application restarts
+(`%APPDATA%\Distillat\settings.json`, see
+[File locations](#file-locations)).
+
+The chosen language also determines the language in which Gemini writes the
+report (summaries, characters, analysis): a discreet reminder appears under
+the selector to make this clear. An already generated report keeps
+displaying in its original language, regardless of a later change to the
+interface language: this is not a bug, a report is never automatically
+retranslated (which would require a new call to the Gemini API, and
+therefore additional quota).
+
+## Quota tracking
+
+Distillat uses the `gemini-3.5-flash` model, whose free tier is limited to:
+
+| Limit | Value |
+| --- | --- |
+| Requests per minute (RPM) | 5 |
+| Tokens per minute (TPM) | 250,000 |
+| Requests per day (RPD) | 20 |
+
+These figures come from the AI Studio dashboard of the account used to
+develop the application (recorded on 2026-07-18) - Google does not expose
+them via the API, they **vary from one account to another and may change
+over time**. Check your own at
+[aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit) and
+adjust them if needed via the **Quota limits** button in the application;
+they are then stored in `%APPDATA%\Distillat\quota_limits.json`.
+
+With only 20 requests per day, the daily quota is the most limiting factor:
+each book consumes at least 2 requests (token counting + generation), more
+if the book is large and needs to be split by chapters - plan generously.
+
+The application shows a real-time estimate of consumption (input/output
+tokens, requests and tokens per minute, requests per day), with a warning as
+soon as 80% of a limit is reached. If a quota is actually exceeded,
+generation fails immediately with a clear message (no automatic retry);
+simply click **Summarize** again once the quota is freed. This tracking is
+**local to the application**: it does not reflect actual usage if the same
+API key is used elsewhere in parallel (another tool, a manual test via AI
+Studio...), in which case the displayed counters will no longer be accurate.
+
+## Installation (development)
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python main.py
+```
+
+## Getting a free Gemini API key
+
+Go to [Google AI Studio](https://aistudio.google.com/apikey) to generate a
+free API key. Never enable billing on this Google account if you want to
+keep the free tier.
+
+## Building the .exe (PyInstaller, one-dir mode)
+
+```bash
+python build.py
+```
+
+This script invokes PyInstaller with `distillat.spec`. The executable is
+generated in `dist/Distillat/Distillat.exe`, along with its dependencies in
+the same folder (one-dir mode: faster startup than a single-file
+executable). The icon of the executable and of all windows comes from
+`icons/open-book_4681875.png`; `icons/distillat.ico` (generated from this
+PNG at several resolutions) is used for `Distillat.exe`'s own icon -
+regenerate it if the source PNG changes.
+
+To distribute the application, copy the entire `dist/Distillat/` folder.
+
+## API key security
+
+The Gemini API key is **never stored in plain text on disk**. It is saved
+via the [keyring](https://pypi.org/project/keyring/) module, which delegates
+to the Windows Credential Manager (DPAPI encryption tied to your Windows
+account on this machine) - the key remains unreadable if the application
+folder is copied elsewhere or accessed by another user account.
+
+This protection has a limitation inherent to any automatic local storage: it
+does not protect against full access to your open Windows session (the
+application itself must be able to read the key back to work without asking
+for a password on every launch).
+
+## File locations
+
+Once compiled, Distillat stores its data **independently of the executable's
+folder** (so nothing is lost if that folder is deleted or replaced during an
+update):
+
+- **API key**: Windows Credential Manager (see
+  [API key security](#api-key-security)).
+- **`.quota_state.json`** (today's request counter), **`quota_limits.json`**
+  (custom RPM/TPM/RPD limits, if changed via the **Quota limits** button),
+  **`settings.json`** (groups together the chosen interface language, see
+  [Interface and report language](#interface-and-report-language); custom
+  prompts per language, if changed via the **Prompts** button; and the last
+  folders used for a report and for a PDF export, see below) and
+  **`.generation_resume.json`** (chapter batches already summarized for a
+  generation interrupted by a failure; absent if there was no failure,
+  removed as soon as a generation finishes successfully):
+  `%APPDATA%\Distillat\`.
+- **Saved reports** (`.distillat.json`) and **PDF exports**:
+  `Documents\Distillat\Fiches\` on first use, then the last folder used for
+  that type of file (report or PDF, remembered separately) is offered by
+  default by **Save the report…**, **Export to .pdf**, and **Load a
+  report…**, including after restarting the application (another location
+  can always be chosen; subfolders work fine there too). If the displayed
+  report was loaded from a file, its original folder is offered first,
+  along with its file name; saving it back to its original file doesn't ask
+  for overwrite confirmation (a message simply confirms the update was
+  saved). The cover is automatically resized and recompressed before being
+  stored in the report or the PDF document, to avoid a high-resolution image
+  needlessly bloating the file; an existing report still containing an
+  oversized cover (created by an earlier version) is lightened automatically
+  the next time it is loaded.
+- **`LICENSE`**, **application icon** (`icons/open-book_4681875.png`), and
+  **translation files** (`locales/fr.json`, `locales/en.json`): bundled at
+  compile time (in `_internal/`). The `LICENSE` is accessible from the
+  application's footer ("Copyright ... - GNU GPL v3 license").
+
+In development (`python main.py`), all these locations are identical to the
+compiled mode, including the technical files (`.quota_state.json`,
+`quota_limits.json`, `settings.json`, `.generation_resume.json`), now always
+in `%APPDATA%\Distillat\` regardless of the launch mode (so that quota
+tracking reflects the same actual consumption, no matter how the application
+is launched). The `Fiches/` folder at the project root only hosts the
+sample report shipped with the code.
+
+If you're updating from an earlier version that stored these files next to
+the executable, the application automatically moves them to the new
+locations on first launch (never overwriting a file already present at the
+destination). Likewise, if you're updating from an earlier version where
+`settings.json`, custom prompts, and the last folders used were each in
+their own file (`last_dirs.json`, `prompts.json`), their content is
+automatically merged into `settings.json` on first launch, without any data
+loss.
+
+## License
+
+This software is distributed under the [GNU GPL v3](LICENSE) license.

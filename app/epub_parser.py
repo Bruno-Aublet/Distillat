@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from ebooklib import epub
 
 from app.cover_image import shrink_cover_image
+from app.i18n import tr
 
 
 @dataclass
@@ -37,14 +38,14 @@ def _get_title(book: epub.EpubBook) -> str:
     title = book.get_metadata("DC", "title")
     if title:
         return title[0][0]
-    return "Titre inconnu"
+    return tr("book_parsers.unknown_title")
 
 
 def _get_author(book: epub.EpubBook) -> str:
     author = book.get_metadata("DC", "creator")
     if author:
         return author[0][0]
-    return "Auteur inconnu"
+    return tr("book_parsers.unknown_author")
 
 
 def _find_cover_image_bytes(book: epub.EpubBook) -> bytes | None:
@@ -121,14 +122,14 @@ def parse_epub(file_path: str) -> BookContent:
         name = item.get_name()
         title = toc_map.get(name)
         if not title:
-            title = f"Chapitre {fallback_index}"
+            title = tr("epub_parser.fallback_chapter_title", index=fallback_index)
             fallback_index += 1
 
         chapters.append(Chapter(title=title, text=text))
         full_text_parts.append(f"## {title}\n\n{text}")
 
     if not chapters:
-        raise ValueError("Aucun contenu textuel n'a pu être extrait de cet EPUB.")
+        raise ValueError(tr("epub_parser.no_text_extracted"))
 
     return BookContent(
         book_title=_get_title(book),

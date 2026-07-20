@@ -1,0 +1,204 @@
+{
+  "book_parsers": {
+    "unknown_title": "Titre inconnu",
+    "unknown_author": "Auteur inconnu"
+  },
+  "book_report": {
+    "fallback_filename": "livre"
+  },
+  "epub_parser": {
+    "fallback_chapter_title": "Chapitre {index}",
+    "no_text_extracted": "Aucun contenu textuel n'a pu être extrait de cet EPUB."
+  },
+  "pdf_parser": {
+    "no_text_extracted": "Aucun texte n'a pu être extrait de ce PDF (il s'agit peut-être d'un scan sans OCR).",
+    "page_range_title": "Pages {first_page}-{last_page}",
+    "single_page_title": "Page {page}"
+  },
+  "pdf_export": {
+    "summary_heading": "Résumé court",
+    "detailed_summary_heading": "Résumé détaillé",
+    "characters_heading": "Personnages principaux",
+    "analysis_heading": "Analyse littéraire"
+  },
+  "gemini_errors": {
+    "daily_quota_exceeded": "Le quota journalier de requêtes Gemini est épuisé pour aujourd'hui. Il se réinitialise à minuit. (erreur 429 : quota journalier dépassé)",
+    "rate_quota_exceeded": "Le quota Gemini (requêtes ou tokens par minute) est temporairement dépassé. Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 429 : quota par minute dépassé)",
+    "service_unavailable": "Le service Gemini est temporairement indisponible. Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 503)",
+    "internal_server_error": "Le service Gemini a rencontré une erreur interne. Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 500)",
+    "deadline_exceeded": "Le service Gemini a mis trop de temps à répondre. Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 504)",
+    "invalid_api_key": "La clé API Gemini est invalide, expirée ou ne dispose pas des autorisations nécessaires. Vérifiez-la via le bouton Clé API. (erreur 401/403)",
+    "error_code": "erreur {code}",
+    "generic_api_error": "Une erreur est survenue lors de la communication avec l'API Gemini{status_part} : {error}",
+    "blocked_by_safety_filters": "Gemini n'a pas produit de réponse exploitable, probablement bloquée par ses filtres de sécurité (contenu du livre jugé sensible). Nouvelle tentative impossible pour cette requête.",
+    "empty_response": "Réponse vide reçue de l'API Gemini.",
+    "invalid_prompt_placeholder": "Le prompt personnalisé « {prompt_label} » contient une erreur : le repère {error} n'est pas reconnu. Vérifiez son orthographe dans la fenêtre Prompts (bouton « Réinitialiser ce prompt » si besoin).",
+    "unreadable_response": "Réponse de Gemini illisible (format inattendu) : {error}",
+    "unexpected_response_shape": "La réponse de Gemini n'a pas la forme attendue (racine JSON non exploitable).",
+    "no_usable_summary": "La réponse de Gemini ne contient pas de résumé exploitable."
+  },
+  "gemini_progress": {
+    "counting_tokens": "Comptage des tokens du texte extrait…",
+    "single_request": "Le livre tient en une seule requête ({token_count} tokens). Génération en cours…",
+    "book_too_large": "Livre trop volumineux ({token_count} tokens). Découpage en {batch_count} lot(s) de chapitres ({chapter_count} chapitres au total)…",
+    "summarizing_batch": "Résumé du lot de chapitres {current}/{total}…",
+    "batch_summarized": "Lot de chapitres {current}/{total} résumé.",
+    "merging_summaries": "Résumés fusionnés. Identification des personnages et rédaction de l'analyse…",
+    "done": "Résumé, personnages et analyse terminés."
+  },
+  "worker_progress": {
+    "reading_file": "Lecture du fichier…"
+  },
+  "language_selector": {
+    "label": "Langue :",
+    "french": "Français",
+    "english": "English"
+  },
+  "license_dialog": {
+    "window_title": "Licence",
+    "file_not_found": "Fichier de licence introuvable ({license_path}).\n\nCe logiciel est distribué sous licence GNU GPL v3 : https://www.gnu.org/licenses/gpl-3.0.txt"
+  },
+  "extra_text_dialog": {
+    "window_title": "Contenu supplémentaire ignoré",
+    "explanation": "Gemini a produit ce texte en plus du contenu utilisé pour la fiche. Il peut s'agir d'une répétition sans intérêt ou de contenu légitime : vérifiez-le et copiez-collez ce qui vous semble utile."
+  },
+  "eye_icon": {
+    "tooltip": "Afficher/masquer la clé"
+  },
+  "api_key_dialog": {
+    "window_title": "Clé API Gemini",
+    "info": "Récupérez votre clé gratuite sur <a href=\"https://aistudio.google.com/apikey\">Google AI Studio</a>. Elle sera enregistrée de façon chiffrée via le Gestionnaire d'identification Windows - ne la partagez pas.",
+    "warning": "⚠️ Ne cliquez jamais sur « Activer la facturation » : vous perdriez le palier gratuit de Gemini.",
+    "key_placeholder": "AIza...",
+    "key_label": "Clé API :",
+    "missing_key_title": "Clé API manquante",
+    "missing_key_message": "Veuillez saisir une clé API valide.",
+    "save_error_title": "Erreur d'enregistrement",
+    "save_error_message": "Impossible d'enregistrer la clé API : le Gestionnaire d'identification Windows est indisponible."
+  },
+  "quota_limits_dialog": {
+    "window_title": "Limites de quota Gemini",
+    "model_label": "Modèle utilisé : <b>{model_name}</b>",
+    "info": "Google ne publie pas ces limites via l'API. Consultez les vôtres sur <a href=\"https://aistudio.google.com/rate-limit\">aistudio.google.com/rate-limit</a> (pour ce modèle précisément) et ajustez-les ici si elles diffèrent de celles affichées dans l'application.",
+    "rpm_label": "Requêtes par minute (RPM) :",
+    "tpm_label": "Tokens par minute (TPM) :",
+    "rpd_label": "Requêtes par jour (RPD) :",
+    "save_error_title": "Erreur de sauvegarde",
+    "save_error_message": "Impossible d'enregistrer les limites de quota : {error}"
+  },
+  "prompts_dialog": {
+    "window_title": "Prompts Gemini",
+    "warning": "⚠️ Ces prompts pilotent directement la génération des fiches et fonctionnent tels quels. Les modifier peut faire échouer la génération ou produire des résultats incohérents (résultat non exploitable, réponse non reconnue par l'application, etc.) : modifiez-les à vos risques et périls. Les portions entre accolades, par exemple {book_title} ou {full_text}, sont remplacées automatiquement par l'application : ne les supprimez pas et ne changez pas leur orthographe, sous peine d'erreur.",
+    "reset_button": "Réinitialiser ce prompt",
+    "save_error_title": "Erreur de sauvegarde",
+    "save_error_message": "Impossible d'enregistrer les prompts : {error}",
+    "tabs": {
+      "full_report": {
+        "title": "Résumé + personnages + analyse",
+        "explanation": "Cas le plus courant : le livre tient en entier dans une seule requête. Ce prompt demande en une fois le résumé court, le résumé détaillé, les personnages et l'analyse littéraire."
+      },
+      "chapter_summary": {
+        "title": "1. Résumé d'un lot de chapitres",
+        "explanation": "Cas d'un livre trop volumineux pour tenir dans une seule requête : premier prompt du découpage. Le livre est réparti en lots de plusieurs chapitres consécutifs (le plus possible à la fois selon la taille du livre), pour limiter le nombre de requêtes envoyées à l'API (le quota gratuit journalier est très limité). Ce prompt reçoit un lot et doit résumer chaque chapitre du lot séparément."
+      },
+      "consolidation": {
+        "title": "2. Fusion résumé + personnages + analyse",
+        "explanation": "Toujours dans le cas d'un livre découpé : une fois tous les lots résumés séparément, ce prompt reçoit l'ensemble des résumés de chapitre (jamais le texte intégral) et produit en une seule fois le résumé court, le résumé détaillé, les personnages et l'analyse littéraire du livre entier."
+      }
+    }
+  },
+  "drop_zone": {
+    "prompt": "Glissez-déposez un fichier EPUB, PDF ou une fiche .distillat.json ici<br>ou cliquez pour parcourir",
+    "busy": "Résumé en cours...<br>Glissez-déposez un nouveau fichier une fois terminé",
+    "file_dialog_title": "Choisir un fichier EPUB, PDF ou une fiche",
+    "file_dialog_filter": "Tous les formats pris en charge (*.epub *.pdf *.distillat.json);;Fichiers EPUB/PDF (*.epub *.pdf);;Fiches Distillat (*.distillat.json)"
+  },
+  "main_window": {
+    "window_title": "Distillat v{version} - Résumé de livres avec Gemini",
+    "title_label": "Distillat",
+    "prompts_button": "Prompts",
+    "quota_limits_button": "Limites de quota",
+    "api_key_button": "Clé API",
+    "output_language_hint": "Les fiches sont générées en français : ce réglage détermine aussi la langue des résumés produits par Gemini.",
+    "update_banner": "<a href=\"#\">🆕 Une nouvelle version de Distillat est disponible (v{version}), cliquez pour la télécharger</a>",
+    "no_file_selected": "Aucun fichier sélectionné",
+    "file_selected": "Fichier sélectionné : {filename}",
+    "remove_file_button": "✕ Retirer",
+    "summarize_button": "Résumer",
+    "extra_text_label": "<a href=\"#\">ℹ️ Du contenu supplémentaire généré par Gemini a été ignoré, cliquez pour le consulter</a>",
+    "quota_disclaimer": "Ces compteurs sont des estimations locales à cette application. Ils seront faussés si la même clé API est aussi utilisée ailleurs en parallèle.",
+    "load_report_button": "Charger une fiche",
+    "save_report_button": "Sauvegarder la fiche",
+    "close_report_button": "Fermer la fiche",
+    "export_pdf_button": "Exporter en .pdf",
+    "footer_button": "Copyright 2026 Bruno Aublet - Licence GNU GPL v3",
+    "no_cover": "Pas de couverture",
+    "summary_placeholder": "Le résumé court en français apparaîtra ici après traitement.",
+    "detailed_summary_placeholder": "Le résumé détaillé en français apparaîtra ici après traitement.",
+    "characters_placeholder": "Les fiches des personnages principaux apparaîtront ici après traitement.",
+    "no_characters": "Aucun personnage principal identifié.",
+    "analysis_placeholder": "L'analyse littéraire apparaîtra ici après traitement.",
+    "tab_cover": "Couverture",
+    "tab_summary": "Résumé court",
+    "tab_detailed_summary": "Résumé détaillé",
+    "tab_characters": "Personnages",
+    "tab_analysis": "Analyse",
+    "no_detailed_summary": "Aucun résumé détaillé disponible pour cette fiche.",
+    "starting_status": "Démarrage du traitement…",
+    "elapsed_suffix": "{message} (écoulé : {elapsed})",
+    "duration_minutes": "{minutes} min {seconds:02d} s",
+    "duration_seconds": "{seconds} s",
+    "quota_display": "Tokens - entrée : {input_tokens} · sortie : {output_tokens} · total : {total_tokens}\nRequêtes/minute : {rpm}/{rpm_limit} · Tokens/minute : {tpm}/{tpm_limit} · Requêtes/jour : {rpd}/{rpd_limit}",
+    "quota_threshold_prefix": "⚠️ Quota bientôt atteint : ",
+    "quota_threshold_rpd": "{used}/{limit} requêtes utilisées aujourd'hui",
+    "quota_threshold_rpm": "{used}/{limit} requêtes sur la minute en cours",
+    "quota_threshold_tpm": "{used}/{limit} tokens sur la minute en cours",
+    "mode_split": "Résumé consolidé à partir de {chapter_count} chapitres.",
+    "mode_single": "Résumé produit en une seule requête.",
+    "finished_status": "Terminé en {duration}. {mode}",
+    "failed_status": "Échec après {duration}.",
+    "quota_exceeded_warning": "🚫 Quota Gemini dépassé, l'appli ne peut plus faire de requêtes pour l'instant. Réessayez plus tard (le quota par minute se réinitialise en 60 s, le quota journalier à minuit).",
+    "resume_wait_hint_daily": "C'est le quota JOURNALIER (nombre de requêtes/jour) qui est épuisé : il ne se réinitialise qu'à minuit, il faudra donc attendre demain avant de pouvoir reprendre. Une fois ce délai passé, ",
+    "resume_wait_hint_minute": "C'est le quota PAR MINUTE (requêtes ou tokens/minute) qui est temporairement dépassé : il se libère de lui-même en général en moins de 2 minutes. Une fois ce délai passé, ",
+    "resume_wait_hint_other": "Ce n'est pas un problème de quota : rien à attendre, il s'agit probablement d'un aléa ponctuel de génération. Vous pouvez réessayer tout de suite, ",
+    "resume_hint_suffix": "\n\nRien n'est perdu : les {batches_done}/{batches_total} lot(s) de chapitres déjà résumés avec succès ont été sauvegardés. {wait_hint}glissez-déposez à nouveau ce même fichier EPUB/PDF et cliquez sur \"Résumer\" : Distillat reconnaîtra automatiquement où le traitement s'était arrêté et proposera de reprendre exactement à partir de là, sans refaire le travail déjà fait.",
+    "error_title": "Erreur",
+    "save_pdf_dialog_title": "Enregistrer le résumé",
+    "save_pdf_filter": "Documents PDF (*.pdf)",
+    "save_success_title": "Sauvegarde réussie",
+    "pdf_saved_message": "Document enregistré :\n{path}",
+    "save_error_title": "Erreur de sauvegarde",
+    "save_report_dialog_title": "Enregistrer la fiche",
+    "save_report_filter": "Fiches Distillat (*.json)",
+    "existing_file_title": "Fichier existant",
+    "existing_file_message": "Le fichier existe déjà :\n{path}\n\nVoulez-vous le remplacer ?",
+    "yes": "Oui",
+    "no": "Non",
+    "report_overwritten_message": "La fiche a été correctement modifiée.",
+    "report_saved_message": "Fiche enregistrée :\n{path}",
+    "load_report_dialog_title": "Charger une fiche",
+    "load_report_filter": "Fiches Distillat (*.json)",
+    "load_error_title": "Erreur de chargement",
+    "load_error_message": "Fichier illisible : {error}",
+    "report_loaded_status": "Fiche chargée depuis {filename}.",
+    "unsaved_report_dialog": {
+      "window_title": "Fiche non sauvegardée",
+      "text": "La fiche actuelle n'a pas été sauvegardée. Voulez-vous continuer sans sauvegarder ?",
+      "discard_button": "Oui : perdre les modifications",
+      "cancel_button": "Non : retour à la fiche",
+      "save_button": "Non : sauvegarder et fermer la fiche"
+    },
+    "abort_generation_dialog": {
+      "window_title": "Génération en cours",
+      "text": "Une génération est en cours. Voulez-vous vraiment quitter ?\nLa fiche en cours de génération sera perdue (le quota Gemini déjà consommé ne sera pas restitué).",
+      "quit_button": "Oui : quitter",
+      "stay_button": "Non : laisser la génération se terminer"
+    },
+    "resume_dialog": {
+      "window_title": "Reprendre la génération interrompue ?",
+      "text": "Une génération précédente pour ce livre s'était arrêtée après {batches_done}/{batches_total} lot(s) de chapitres résumé(s) avec succès.\n\nReprendre à partir de là (recommandé), ou repartir de zéro ?",
+      "resume_button": "Reprendre",
+      "restart_button": "Repartir de zéro"
+    }
+  }
+}
