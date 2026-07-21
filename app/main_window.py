@@ -764,10 +764,26 @@ class MainWindow(QMainWindow):
         # confirmation superflue.
         self._last_report_source_path: Path | None = None
         self._report_dirty = False
+        # daily_state_path est un chemin provisoire (aucun compte connu tant
+        # qu'aucune génération n'a démarré) : switch_api_key(), appelée dans
+        # _on_summarize_clicked() dès que la clé API est connue, le remplace
+        # par le fichier propre à cette clé (un fichier par compte, voir
+        # quota_tracker.daily_state_path_for_key() - séparation ajoutée le
+        # 2026-07-21 après avoir constaté qu'un changement de clé API en
+        # cours de journée continuait sinon d'accumuler sur le même
+        # compteur, mélangeant deux comptes Google distincts).
         self.quota_tracker = QuotaTracker(
-            daily_state_path=config.get_settings_dir() / ".quota_state.json",
+            daily_state_path=config.get_settings_dir() / ".quota_state_pending.json",
             settings_dir=config.get_settings_dir(),
         )
+        # Bascule immédiatement sur le fichier de la clé déjà enregistrée
+        # (cas normal, hors tout premier lancement sans clé) : sans ça,
+        # l'affichage du quota au démarrage montrerait encore
+        # .quota_state_pending.json (toujours à 0) jusqu'au premier clic sur
+        # "Résumer".
+        _already_saved_api_key = config.load_api_key()
+        if _already_saved_api_key:
+            self.quota_tracker.switch_api_key(_already_saved_api_key)
         # Ligne de session dans le journal d'appels API : délimite les
         # lancements de l'application (version, processus, machine, compteur
         # quotidien tel que rechargé du disque), pour situer chaque
@@ -1275,6 +1291,11 @@ class MainWindow(QMainWindow):
                     tr("api_key_dialog.save_error_message"),
                 )
                 return None
+            # Bascule aussitôt sur le fichier de quota de cette clé (et
+            # rafraîchit l'affichage), sans attendre le prochain clic sur
+            # "Résumer" : sans quoi le compteur affiché resterait celui de
+            # l'ancienne clé jusqu'à la prochaine génération.
+            self._update_quota_display(self.quota_tracker.switch_api_key(api_key))
             return api_key
         return None
 
@@ -1580,6 +1601,7 @@ class MainWindow(QMainWindow):
         api_key = self._ensure_api_key(prompt_if_missing=True)
         if not api_key:
             return
+        self.quota_tracker.switch_api_key(api_key)
 
         resume_state = self._find_resume_state_for(self.selected_book_path)
 

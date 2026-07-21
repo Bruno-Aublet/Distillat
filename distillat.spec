@@ -10,8 +10,7 @@ a = Analysis(
     datas=[('LICENSE', '.'), ('CHANGELOG.md', '.'), ('icons/open-book_4681875.png', 'icons'), ('locales', 'locales')]
     + collect_data_files('tzdata'),
     hiddenimports=[
-        'google.generativeai',
-        'google.ai.generativelanguage',
+        'google.genai',
         'ebooklib',
         'bs4',
         'reportlab',

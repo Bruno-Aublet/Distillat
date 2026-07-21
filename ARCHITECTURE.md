@@ -52,9 +52,11 @@ sauvegarde JSON et/ou export PDF.
     pour `settings.json` (dossier de config), qui regroupe tous les réglages
     peu fréquemment modifiés (langue de l'UI, prompts personnalisés par
     langue, derniers dossiers utilisés) en un seul fichier - à la différence
-    du compteur de quota (`.quota_state.json`) ou des limites RPM/TPM/RPD
-    (`quota_limits.json`), réécrits bien plus souvent (à chaque appel Gemini
-    pour le premier) et donc gardés dans des fichiers séparés pour limiter la
+    du compteur de quota (`.quota_state_<hash>.json`, un fichier par clé API
+    depuis le 2026-07-21, voir `quota_tracker.py` ci-dessous) ou des limites
+    RPM/TPM/RPD (`quota_limits.json`), réécrits bien plus souvent (à chaque
+    appel Gemini pour le premier) et donc gardés dans des fichiers séparés
+    pour limiter la
     fenêtre d'exposition à une corruption et éviter de réécrire inutilement
     des données volumineuses (les prompts personnalisés) à chaque appel API.
     `save_settings()` fait un cycle lecture-fusion-écriture complet (une clé
@@ -113,7 +115,12 @@ sauvegarde JSON et/ou export PDF.
   un titre de repli traduit à défaut) ; extrait la couverture (plusieurs
   stratégies de repli, beaucoup d'EPUB ne la taguent pas proprement). Retourne
   un `BookContent` (titre, auteur, texte intégral, liste de `Chapter`,
-  couverture).
+  couverture). `read_epub()` passe explicitement `options={"ignore_ncx":
+  False}` pour continuer à s'appuyer sur le NCX (table des matières EPUB2)
+  même sur les versions récentes d'`ebooklib` (0.20+) où ce comportement n'est
+  plus le défaut ; à ne pas retirer sans vérifier que la table des matières
+  reste correctement extraite sur des EPUB2 legacy n'ayant pas de Navigation
+  Document EPUB3.
 
 - **`app/pdf_parser.py`** : extrait le texte d'un PDF via `pypdf`, page par
   page ; les PDF n'ayant pas de structure de chapitres fiable, le texte est
@@ -129,11 +136,19 @@ sauvegarde JSON et/ou export PDF.
   les bytes d'origine) : une couverture illisible ou piégée ne doit jamais
   faire échouer tout le parsing du livre.
 
-- **`app/gemini_client.py`** (coeur de la génération) :
-  - `MODEL_NAME = "gemini-3.5-flash"`. `_get_model()` (texte libre, utilisé
-    uniquement pour `count_tokens()`) et `_get_json_model()` (force
-    `response_mime_type="application/json"` côté API pour tous les appels de
-    génération, pour fiabiliser le JSON en sortie).
+- **`app/gemini_client.py`** (coeur de la génération) : utilise le SDK
+  `google-genai` (migré depuis `google-generativeai` le 2026-07-21, dépôt
+  d'origine archivé par Google au profit de ce SDK unifié - voir
+  `CHANGELOG.md`). Un seul `genai.Client` module-level (`configure()`), créé
+  avec la clé API et `_HTTP_OPTIONS_NO_RETRY` ; pas d'équivalent du
+  `genai.configure()` global de l'ancien SDK, ni de `GenerativeModel` par
+  appel : `model=MODEL_NAME` est passé explicitement à chaque appel
+  (`_client.models.generate_content(...)`/`count_tokens(...)`).
+  - `MODEL_NAME = "gemini-3.5-flash"`. Le mode JSON forcé
+    (`response_mime_type="application/json"`, pour fiabiliser le JSON en
+    sortie) est un `genai_types.GenerateContentConfig` passé en paramètre
+    `config=` de chaque appel de génération (`_JSON_GENERATION_CONFIG`), pas
+    un modèle séparé comme avec l'ancien SDK.
   - `generate_book_report()` est le point d'entrée : compte les tokens du
     texte intégral, puis deux cas stricts, sans autre cas intermédiaire :
     - **Texte tient dans `MAX_TOKENS_PER_REQUEST` (200k)** : un seul appel
@@ -180,22 +195,39 @@ sauvegarde JSON et/ou export PDF.
   - `_call_gemini()` effectue un seul appel, sans retry automatique (voir
     historique de conversation du 2026-07-19 : c'est un choix délibéré,
     l'utilisateur doit recliquer lui-même sur "Résumer") : toute erreur API
-    (quota RPM/TPM, quota RPD quotidien, `ServiceUnavailable`/
-    `InternalServerError`/`DeadlineExceeded` (503/500/504), clé invalide
-    `PermissionDenied`/`Unauthenticated`) échoue immédiatement. "Sans retry"
-    vaut aussi au niveau de la bibliothèque : `generate_content` est appelé
-    avec `request_options={"retry": None}`, car la couche transport de
-    `google-generativeai` retente sinon d'elle-même sur 503
-    (`ServiceUnavailable`), avec backoff de 1 à 10 s pendant jusqu'à 10 min
-    (voir `generative_service/transports/base.py` du paquet installé) -
-    chaque tentative supplémentaire était une vraie requête comptée par
-    Google (RPM/RPD) mais invisible pour l'application et son suivi de quota
-    (découvert le 2026-07-21 en cherchant un écart entre compteur local et
-    dashboard AI Studio). Ne pas retirer ce paramètre, et l'ajouter à tout
-    nouvel appel de génération. `count_tokens()` garde en revanche le retry
-    par défaut de la bibliothèque : appel gratuit hors quota, le laisser
-    retenter un 503 est sans conséquence et évite de faire échouer une
-    génération pour un simple comptage.
+    (quota RPM/TPM, quota RPD quotidien, service indisponible/erreur
+    serveur/timeout (503/500/504), clé invalide (400 avec
+    `error.details[].reason == "API_KEY_INVALID"`, ou 401/403)) échoue
+    immédiatement. `google-genai` ne distingue plus ces cas par une classe
+    Python dédiée par erreur (contrairement à l'ancien SDK
+    `google-generativeai` : `ResourceExhausted`/`ServiceUnavailable`/etc.) :
+    seulement deux sous-classes génériques de `genai_errors.APIError`
+    (`ClientError` pour 4xx, `ServerError` pour 5xx), toutes deux exposant
+    `exc.code` (l'entier HTTP) et `exc.details` (le corps JSON brut de
+    l'erreur) ; `_friendly_error_message()` aiguille donc explicitement sur
+    `exc.code`, et `_extract_quota_blocked_info()`/`_error_reason()` cherchent
+    dans `exc.details["error"]["details"]` les blocs identifiés par leur clé
+    `"@type"` (`QuotaFailure` pour le `quotaId` distinguant quota
+    journalier/par minute, `RetryInfo` pour le délai de nouvelle tentative,
+    `ErrorInfo` pour le `reason` d'une clé invalide) - vérifié empiriquement
+    contre de vraies erreurs 429/400 le 2026-07-21 lors de la migration.
+    "Sans retry" vaut aussi au niveau du SDK : le `Client` est créé
+    (`configure()`) avec `_HTTP_OPTIONS_NO_RETRY`
+    (`HttpRetryOptions(attempts=1)`), car `google-genai` retente sinon
+    lui-même jusqu'à 5 fois sur 408/429/5xx par défaut (contrairement à
+    l'ancien SDK, ce comportement est ici documenté et configurable
+    explicitement, plutôt qu'un comportement caché découvert dans le code
+    source du paquet installé) - chaque tentative supplémentaire était une
+    vraie requête comptée par Google (RPM/RPD) mais invisible pour
+    l'application et son suivi de quota (découvert le 2026-07-21 en
+    cherchant un écart entre compteur local et dashboard AI Studio avec
+    l'ancien SDK ; même risque avec le nouveau si le retry par défaut restait
+    actif). Ne pas retirer ce paramètre du `Client`. `count_tokens()` garde
+    en revanche le retry par défaut du SDK, via `_COUNT_TOKENS_CONFIG`
+    (`CountTokensConfig(http_options=HttpOptions())`, qui écrase le
+    `retry_options` hérité du `Client` pour cet appel précis) : appel gratuit
+    hors quota, le laisser retenter un 503 est sans conséquence et évite de
+    faire échouer une génération pour un simple comptage.
     `quota_tracker.record_call()` est appelé aussi bien en cas de succès
     qu'en cas d'échec de cet appel (bug corrigé le 2026-07-21) : Google
     comptabilise la requête côté serveur (RPM/RPD) dès qu'elle est reçue,
@@ -267,9 +299,16 @@ sauvegarde JSON et/ou export PDF.
     signalent deux instances simultanées). Jamais le contenu des prompts ni des réponses (volumineux
     et dérivé du livre traité, donc plus sensible que des métadonnées).
     Écriture best-effort (`except OSError: pass`) : ne doit jamais faire
-    échouer un appel ni une génération. Pas de rotation ni de purge (choix
-    assumé pendant la phase de diagnostic, cohérent avec les fichiers
-    `gemini_unparsable_*`).
+    échouer un appel ni une génération. Purgé par `_trim_api_requests_log()`
+    (ajouté le 2026-07-21) : au démarrage d'une génération (marqueur
+    `generation DEBUT`), si le fichier contient déjà
+    `API_REQUESTS_LOG_MAX_GENERATIONS` (5) occurrences de ce marqueur, tout ce
+    qui précède la 2e occurrence est supprimé (donc le bloc complet du plus
+    ancien livre, y compris un éventuel `application DEMARRAGE` initial qui le
+    précédait) - le fichier ne contient donc jamais plus de 5 générations
+    passées à la fois. Choix délibérément petit (le fichier doit rester
+    collable tel quel dans une conversation pour diagnostic), au prix de ne
+    couvrir qu'un historique court plutôt que toute la phase de diagnostic.
   - `_parse_json_object()` utilise `json.JSONDecoder().raw_decode()` (pas
     `json.loads()`) pour tolérer du contenu superflu après le premier objet
     JSON valide ; ce surplus est renvoyé séparément (`leftover`), jamais jeté
@@ -320,7 +359,11 @@ sauvegarde JSON et/ou export PDF.
     réparation ci-dessus où la réponse brute avait été perdue dès l'affichage
     de l'erreur, empêchant tout diagnostic a posteriori. Écriture best-effort
     (`except OSError: pass`) : ne doit jamais empêcher la `GeminiError`
-    normale de remonter à l'utilisateur.
+    normale de remonter à l'utilisateur. Purgé juste après l'écriture (même
+    2026-07-21) : les fichiers `gemini_unparsable_*.txt` du dossier sont
+    triés par date de modification, et seuls les `UNPARSABLE_LOGS_MAX_FILES`
+    (5) plus récents sont conservés, les plus anciens étant supprimés
+    (`unlink(missing_ok=True)`, best-effort comme le reste).
   - `_normalize_dashes()` : remplace systématiquement les tirets cadratin/
     demi-cadratin produits par Gemini par un tiret simple.
   - `default_prompt_templates()` (3 clés : `full_report`, `chapter_summary`,
@@ -392,7 +435,8 @@ sauvegarde JSON et/ou export PDF.
 
 - **`app/quota_tracker.py`** (`QuotaTracker`) : suivi *local* et *estimatif*
   des quotas Gemini (RPM/TPM sur fenêtre glissante de 60s, RPD persisté par
-  date dans `.quota_state.json`). Les limites par défaut
+  date dans `.quota_state_<hash>.json`, un fichier par clé API - voir plus
+  bas). Les limites par défaut
   (`DEFAULT_RPM/TPM/RPD_LIMIT`) sont ajustables par l'utilisateur via l'UI et
   stockées dans `quota_limits.json`. Ne reflète que ce que *cette*
   application a envoyé (faussé si la même clé est utilisée ailleurs).
@@ -415,14 +459,21 @@ sauvegarde JSON et/ou export PDF.
   affichait 6, après plusieurs échecs sur un livre en plusieurs lots) - ne
   jamais réintroduire un appel à `record_call()` conditionné à la réussite de
   `generate_content()`. À distinguer de `count_tokens()`
-  (`GenerativeModel.count_tokens()`, utilisé par `count_tokens()` du même
+  (`_client.models.count_tokens()`, utilisé par `count_tokens()` du même
   module et par `_split_chapters_into_batches()`) : cet appel est gratuit et
   compté sur un quota séparé (3000 requêtes/minute, propre à `countTokens`),
   jamais sur le RPD/RPM/TPM suivi ici - vérifié empiriquement le 2026-07-21
   (appel réel `count_tokens()` sur le compte de développement : le RPD du
   dashboard AI Studio n'a pas bougé), confirmant la documentation officielle
-  ([Firebase AI Logic - Count Tokens](https://firebase.google.com/docs/ai-logic/count-tokens)).
-  Il ne faut donc jamais faire remonter les appels `count_tokens()` dans
+  ([Firebase AI Logic - Count Tokens](https://firebase.google.com/docs/ai-logic/count-tokens),
+  qui documente ce produit précis, pas directement l'API Gemini/AI Studio
+  utilisée ici par clé API - aucune page officielle équivalente trouvée pour
+  cette dernière). Re-vérifié empiriquement après la migration vers
+  `google-genai` (2026-07-21) : 15 appels `count_tokens()` en rafale sur le
+  compte de développement n'ont provoqué aucune erreur 429, alors que le
+  quota `generate_content` de ce même compte est limité à 5 requêtes/minute -
+  confirme que `count_tokens()` reste bien hors de ce quota avec le nouveau
+  SDK. Il ne faut donc jamais faire remonter les appels `count_tokens()` dans
   `record_call()`/`QuotaSnapshot`, et il est acceptable d'en faire un
   supplémentaire (ex. pour estimer les tokens d'un prompt avant un échec
   potentiel) sans crainte de consommer le quota journalier serré à 20
@@ -436,6 +487,33 @@ sauvegarde JSON et/ou export PDF.
   `record_call()` (qui, lui, fait foi pour le quota réel RPD/RPM) n'a pas
   encore pu être crédité faute de réponse. Ne jamais laisser ce compteur
   influencer `requests_today`/`_recent_calls` ni les limites affichées.
+  **Isolation par clé API** (`switch_api_key()`, ajoutée le 2026-07-21) :
+  avant ce fix, `daily_state_path` était un chemin fixe unique
+  (`.quota_state.json`), donc changer de clé API en cours de journée
+  (bouton **Clé API**, ou en testant plusieurs comptes Google) continuait de
+  lire/écrire le même fichier, mélangeant silencieusement la consommation de
+  deux comptes distincts dans le même compteur affiché - constaté en testant
+  avec un second compte pour contourner un quota journalier atteint sur le
+  premier. `api_key_hash()` (SHA-256 tronqué à 8 caractères, jamais la clé en
+  clair - même dérivation que le hash déjà journalisé par `main_window` dans
+  `api_requests.log`, `cle_api_hash=...`) et `daily_state_path_for_key()`
+  dérivent désormais un fichier `.quota_state_<hash>.json` par clé.
+  `switch_api_key(api_key)` : no-op si le hash n'a pas changé depuis le
+  dernier appel (ou l'initialisation) ; sinon réinitialise tout l'état en
+  mémoire (tokens cumulés, fenêtre glissante RPM, `_requests_in_flight` -
+  aucun sens pour un autre compte), pointe `daily_state_path` vers le
+  fichier de la nouvelle clé, migre une seule fois l'ancien fichier unique
+  `.quota_state.json` s'il existe encore et que le nouveau fichier n'existe
+  pas (`_migrate_legacy_daily_state_if_needed()`, `Path.replace()`), puis
+  recharge le compteur RPD persistant de ce fichier. Appelée par
+  `main_window` : à la construction de `MainWindow` si une clé est déjà
+  enregistrée (sinon l'affichage resterait sur le tracker construit avec un
+  chemin provisoire `.quota_state_pending.json` jusqu'au premier lancement),
+  dans `_on_summarize_clicked()` juste après `_ensure_api_key()` (avant de
+  créer le `SummarizeWorker`), et dans `_prompt_for_api_key()` juste après
+  l'enregistrement d'une nouvelle clé (avec rafraîchissement immédiat de
+  l'affichage via `_update_quota_display()`, sans attendre la prochaine
+  génération).
 
 - **`app/update_checker.py`** : vérification de la disponibilité d'une
   nouvelle version de Distillat via l'API GitHub Releases
@@ -460,10 +538,15 @@ sauvegarde JSON et/ou export PDF.
   couverture est recompressée au passage, en mémoire uniquement) : une
   simple lecture ne doit jamais modifier le fichier lu.
   `sanitize_filename()` nettoie un titre de livre pour en faire un nom de
-  fichier Windows valide, en gardant la ponctuation courante des titres ;
-  retombe sur `fallback` (résolu via `tr("book_report.fallback_filename")` si
-  non fourni explicitement, jamais figé en français : le paramètre par défaut
-  ne peut pas appeler `tr()` au chargement du module, avant que la langue soit
+  fichier Windows valide, par exclusion (retire uniquement les caractères
+  réellement interdits par Windows `< > : " / \ | ? *` et les caractères de
+  contrôle) et non par liste blanche : tout le reste, y compris la
+  ponctuation peu courante (`&`, `#`, `@`...) et les accents, est conservé.
+  Utilisée à la fois pour le nom de fichier de la fiche JSON (`save()`) et
+  pour celui de l'export PDF (`main_window.py`). Retombe sur `fallback`
+  (résolu via `tr("book_report.fallback_filename")` si non fourni
+  explicitement, jamais figé en français : le paramètre par défaut ne peut
+  pas appeler `tr()` au chargement du module, avant que la langue soit
   initialisée) pour un nom réservé Windows (`CON`, `NUL`, `COM1`...) ou se
   terminant par un point/espace après nettoyage.
 

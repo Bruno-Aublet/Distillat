@@ -90,6 +90,24 @@
 
 Voir le skill `add-language` (`.claude/skills/add-language/SKILL.md`).
 
+## 8. Toujours consulter ARCHITECTURE.md avant de chercher ou modifier un module
+
+- Avant de chercher des informations sur un module (comportement, signature,
+  structure de données, fichier de persistance...) ou de le modifier,
+  commencer par lire la section correspondante d'`ARCHITECTURE.md`, plutôt
+  que de lire directement le code source ou de supposer son fonctionnement.
+- Raison : `ARCHITECTURE.md` documente aussi les comportements non évidents à
+  la simple lecture du code (bugs passés corrigés, choix délibérés,
+  contraintes découvertes en production) ; les ignorer risque de réintroduire
+  un bug déjà corrigé ou de défaire un choix volontaire sans le savoir.
+- Pour le détail d'implémentation (code exact, cas limites non documentés
+  dans `ARCHITECTURE.md`), aller ensuite consulter le module lui-même : la
+  lecture d'`ARCHITECTURE.md` vient en complément du code source, jamais en
+  remplacement.
+- `CLAUDE.md` ne garde qu'un résumé d'une ligne par module (voir l'index
+  ci-dessous) : ce n'est qu'un point d'entrée, jamais une source suffisante en
+  soi.
+
 # Carte de l'application
 
 Documentation détaillée déplacée dans `ARCHITECTURE.md` (module par module,

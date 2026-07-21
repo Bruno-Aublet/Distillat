@@ -11,6 +11,7 @@ Le suivi lui-même est purement local : il ne reflète que ce que CETTE
 application a envoyé. Si la même clé API est utilisée ailleurs en parallèle,
 les compteurs ne seront plus fiables.
 """
+import hashlib
 import json
 import threading
 import time
@@ -46,6 +47,25 @@ RPD_LIMIT = DEFAULT_RPD_LIMIT
 
 _WINDOW_SECONDS = 60.0
 _LIMITS_FILENAME = "quota_limits.json"
+_LEGACY_DAILY_STATE_FILENAME = ".quota_state.json"
+
+
+def api_key_hash(api_key: str) -> str:
+    """Hash court (8 caractères hex) d'une clé API, jamais la clé en clair :
+    même dérivation que le hash déjà journalisé par main_window dans
+    api_requests.log (`cle_api_hash=...`), pour qu'un même compte se
+    reconnaisse visuellement entre le nom de fichier de quota et le journal."""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:8]
+
+
+def daily_state_path_for_key(settings_dir: Path, api_key: str) -> Path:
+    """Chemin du fichier de compteur quotidien (RPD) propre à une clé API
+    donnée : un fichier par compte, pour ne jamais mélanger le quota de deux
+    clés différentes utilisées sur la même machine (bug constaté le
+    2026-07-21 en testant avec plusieurs comptes Google : le compteur
+    continuait d'accumuler sur l'ancien fichier unique .quota_state.json
+    quel que soit le compte réellement utilisé pour la génération)."""
+    return settings_dir / f".quota_state_{api_key_hash(api_key)}.json"
 
 
 def load_quota_limits(settings_dir: Path) -> tuple[int, int, int]:
@@ -110,6 +130,7 @@ class QuotaTracker:
     _tpm_limit: int = DEFAULT_TPM_LIMIT
     _rpd_limit: int = DEFAULT_RPD_LIMIT
     _requests_in_flight: int = 0
+    _api_key_hash: str | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
@@ -123,6 +144,34 @@ class QuotaTracker:
         if self.settings_dir is not None:
             with self._lock:
                 self._rpm_limit, self._tpm_limit, self._rpd_limit = load_quota_limits(self.settings_dir)
+
+    def switch_api_key(self, api_key: str) -> QuotaSnapshot:
+        """À appeler dès que la clé API à utiliser pour la prochaine
+        génération est connue (avant de lancer le worker), pour pointer le
+        suivi de quota sur le fichier propre à cette clé plutôt que de
+        continuer à accumuler sur l'état d'une clé précédente. Sans effet si
+        la clé n'a pas changé depuis le dernier appel (ou l'initialisation) :
+        ne recharge/ne réinitialise alors rien, pour ne pas perdre l'état en
+        mémoire d'une génération déjà en cours avec la même clé. L'état en
+        mémoire (tokens cumulés, fenêtre glissante RPM, requêtes en vol) est
+        remis à zéro avant de recharger le compteur RPD persistant du
+        nouveau fichier : ces valeurs n'ont aucun sens pour un autre compte."""
+        with self._lock:
+            new_hash = api_key_hash(api_key)
+            if new_hash == self._api_key_hash:
+                return self._snapshot_locked()
+            self._api_key_hash = new_hash
+            if self.settings_dir is not None:
+                self.daily_state_path = daily_state_path_for_key(self.settings_dir, api_key)
+                self._migrate_legacy_daily_state_if_needed()
+            self.input_tokens_total = 0
+            self.output_tokens_total = 0
+            self._recent_calls = []
+            self._requests_in_flight = 0
+            self._requests_today = 0
+            self._today = _pacific_today()
+            self._load_daily_state()
+            return self._snapshot_locked()
 
     def _load_daily_state(self) -> None:
         if not self.daily_state_path.exists():
@@ -141,6 +190,26 @@ class QuotaTracker:
                 json.dumps({"date": self._today.isoformat(), "requests": self._requests_today}),
                 encoding="utf-8",
             )
+        except OSError:
+            pass
+
+    def _migrate_legacy_daily_state_if_needed(self) -> None:
+        """Reprend l'ancien fichier de compteur unique .quota_state.json (non
+        distingué par clé API, avant ce fix) vers le fichier de la clé
+        actuellement sélectionnée, uniquement si celui-ci n'existe pas encore
+        - pour ne pas perdre le compteur du jour au premier lancement suivant
+        cette mise à jour, sans jamais écraser un fichier par-clé déjà créé.
+        Ne migre qu'une fois : l'ancien fichier est renommé (donc absent) dès
+        la première clé utilisée après la mise à jour ; toute clé suivante
+        démarre normalement de zéro puisqu'aucune trace de sa consommation
+        n'existait avant la séparation par clé."""
+        if self.settings_dir is None or self.daily_state_path.exists():
+            return
+        legacy_path = self.settings_dir / _LEGACY_DAILY_STATE_FILENAME
+        if not legacy_path.exists():
+            return
+        try:
+            legacy_path.replace(self.daily_state_path)
         except OSError:
             pass
 

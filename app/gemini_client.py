@@ -5,16 +5,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-import google.generativeai as genai
-from google.api_core.exceptions import (
-    DeadlineExceeded,
-    GoogleAPIError,
-    InternalServerError,
-    PermissionDenied,
-    ResourceExhausted,
-    ServiceUnavailable,
-    Unauthenticated,
-)
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types as genai_types
 
 from app import config
 from app import i18n
@@ -88,18 +81,42 @@ class QuotaBlockedInfo:
     retry_after_seconds: float | None
 
 
-def _extract_quota_blocked_info(exc: ResourceExhausted) -> QuotaBlockedInfo:
+def _find_error_detail_block(details: object, type_suffix: str) -> dict | None:
+    """Le corps JSON brut d'une erreur API (exc.details, un dict) place les
+    informations structurées (quota dépassé, délai de nouvelle tentative...)
+    dans error.details, une liste de blocs identifiés par leur clé "@type"
+    (ex. "type.googleapis.com/google.rpc.QuotaFailure"), pas par un type
+    Python dédié comme avec l'ancien SDK (google-generativeai) : ce
+    changement de forme (attributs protobuf -> dict JSON générique) est la
+    principale différence à gérer lors de la migration vers google-genai."""
+    if not isinstance(details, dict):
+        return None
+    error = details.get("error")
+    if not isinstance(error, dict):
+        return None
+    for block in error.get("details", []):
+        if isinstance(block, dict) and str(block.get("@type", "")).endswith(type_suffix):
+            return block
+    return None
+
+
+def _extract_quota_blocked_info(exc: genai_errors.APIError) -> QuotaBlockedInfo:
     quota_id: str | None = None
     retry_after_seconds: float | None = None
     try:
-        for detail in exc.details:
-            violations = getattr(detail, "violations", None)
+        quota_block = _find_error_detail_block(exc.details, "QuotaFailure")
+        if quota_block:
+            violations = quota_block.get("violations")
             if violations:
-                quota_id = violations[0].quota_id or violations[0].quota_metric or None
-            retry_delay = getattr(detail, "retry_delay", None)
-            if retry_delay is not None and (retry_delay.seconds or retry_delay.nanos):
-                retry_after_seconds = retry_delay.seconds + retry_delay.nanos / 1e9
-    except (AttributeError, IndexError, TypeError):
+                quota_id = violations[0].get("quotaId") or violations[0].get("quotaMetric") or None
+        retry_block = _find_error_detail_block(exc.details, "RetryInfo")
+        if retry_block:
+            retry_delay = retry_block.get("retryDelay")
+            if retry_delay:
+                # Chaîne au format "6s" ou "6.5s" (protobuf Duration en JSON),
+                # jamais d'unité autre que la seconde pour ce champ.
+                retry_after_seconds = float(str(retry_delay).rstrip("s"))
+    except (AttributeError, IndexError, TypeError, ValueError):
         pass
     return QuotaBlockedInfo(quota_id=quota_id, retry_after_seconds=retry_after_seconds)
 
@@ -112,10 +129,6 @@ def _is_daily_quota(quota_id: str | None) -> bool:
     return bool(quota_id) and "perday" in quota_id.lower()
 
 
-def _http_status(exc: GoogleAPIError) -> int | None:
-    return getattr(exc, "code", None) or getattr(exc, "grpc_status_code", None)
-
-
 def _friendly_error_message(exc: Exception) -> tuple[str, str | None]:
     """Traduit une exception technique de l'API Gemini en message compréhensible
     dans la langue actuellement choisie par l'utilisateur, avec le code d'erreur
@@ -123,42 +136,74 @@ def _friendly_error_message(exc: Exception) -> tuple[str, str | None]:
     ligne...). Retourne aussi error_kind ("daily_quota"/"rate_quota"/None),
     indépendant de la langue du message : c'est sur cette valeur, et non sur le
     texte traduit, que l'appelant (main_window) doit se baser pour adapter son
-    comportement (ex : proposer une reprise)."""
-    if isinstance(exc, ResourceExhausted):
-        blocked_info = _extract_quota_blocked_info(exc)
-        if _is_daily_quota(blocked_info.quota_id):
-            return tr("gemini_errors.daily_quota_exceeded"), "daily_quota"
-        return tr("gemini_errors.rate_quota_exceeded"), "rate_quota"
-    if isinstance(exc, ServiceUnavailable):
-        return tr("gemini_errors.service_unavailable"), None
-    if isinstance(exc, InternalServerError):
-        return tr("gemini_errors.internal_server_error"), None
-    if isinstance(exc, DeadlineExceeded):
-        return tr("gemini_errors.deadline_exceeded"), None
-    if isinstance(exc, (PermissionDenied, Unauthenticated)):
-        return tr("gemini_errors.invalid_api_key"), None
-    status = _http_status(exc) if isinstance(exc, GoogleAPIError) else None
-    status_part = f" ({tr('gemini_errors.error_code', code=status)})" if status else ""
-    return tr("gemini_errors.generic_api_error", status_part=status_part, error=exc), None
+    comportement (ex : proposer une reprise).
+
+    google-genai ne distingue les erreurs que par exc.code (l'entier HTTP) et
+    deux sous-classes génériques (ClientError pour 4xx, ServerError pour
+    5xx) : contrairement à l'ancien SDK, il n'existe plus de classe Python
+    dédiée par cas (quota, service indisponible, timeout...), d'où le
+    aiguillage explicite sur le code ci-dessous. Une clé API invalide est
+    remontée en 400 (pas 401/403 comme avec l'ancien SDK, vérifié
+    empiriquement le 2026-07-21), avec le détail structuré
+    error.details[].reason == "API_KEY_INVALID" : ce cas est donc identifié
+    par ce repère plutôt que par le seul code HTTP, plus fiable qu'un 400 nu
+    qui recouvre aussi d'autres erreurs de requête malformée."""
+    if isinstance(exc, genai_errors.APIError):
+        code = exc.code
+        if code == 429:
+            blocked_info = _extract_quota_blocked_info(exc)
+            if _is_daily_quota(blocked_info.quota_id):
+                return tr("gemini_errors.daily_quota_exceeded"), "daily_quota"
+            return tr("gemini_errors.rate_quota_exceeded"), "rate_quota"
+        if code == 503:
+            return tr("gemini_errors.service_unavailable"), None
+        if code == 500:
+            return tr("gemini_errors.internal_server_error"), None
+        if code == 504:
+            return tr("gemini_errors.deadline_exceeded"), None
+        if code in (401, 403) or _error_reason(exc) == "API_KEY_INVALID":
+            return tr("gemini_errors.invalid_api_key"), None
+        status_part = f" ({tr('gemini_errors.error_code', code=code)})" if code else ""
+        return tr("gemini_errors.generic_api_error", status_part=status_part, error=exc), None
+    return tr("gemini_errors.generic_api_error", status_part="", error=exc), None
+
+
+def _error_reason(exc: genai_errors.APIError) -> str | None:
+    block = _find_error_detail_block(exc.details, "ErrorInfo")
+    return block.get("reason") if block else None
+
+
+_HTTP_OPTIONS_NO_RETRY = genai_types.HttpOptions(
+    retry_options=genai_types.HttpRetryOptions(attempts=1)
+)
+
+# Client courant, créé par configure() : un seul Client réutilisé pour tous
+# les appels (generate_content/count_tokens), à l'image de l'ancien
+# genai.configure() global - google-genai n'a pas d'équivalent module-level,
+# le Client est le point d'entrée explicite de toutes les requêtes.
+_client: genai.Client | None = None
 
 
 def configure(api_key: str) -> None:
-    genai.configure(api_key=api_key)
+    global _client
+    # attempts=1 (pas de nouvelle tentative automatique) reproduit
+    # request_options={"retry": None} de l'ancien SDK : par défaut,
+    # google-genai retente lui-même jusqu'à 5 fois sur 408/429/5xx, ce qui
+    # reproduirait exactement le bug de comptage caché corrigé le 2026-07-21
+    # (voir _call_gemini) si on le laissait activé.
+    _client = genai.Client(api_key=api_key, http_options=_HTTP_OPTIONS_NO_RETRY)
 
 
-def _get_model() -> genai.GenerativeModel:
-    return genai.GenerativeModel(MODEL_NAME)
+_JSON_GENERATION_CONFIG = genai_types.GenerateContentConfig(response_mime_type="application/json")
 
-
-def _get_json_model() -> genai.GenerativeModel:
-    """Modèle configuré pour forcer une sortie JSON syntaxiquement valide côté
-    API (mode JSON natif de Gemini), plutôt que de compter uniquement sur la
-    consigne du prompt : réduit fortement le risque de réponse malformée
-    (guillemet non échappé, virgule manquante...) qui faisait échouer le
-    parsing côté application, sans possibilité de retenter automatiquement."""
-    return genai.GenerativeModel(
-        MODEL_NAME, generation_config=genai.GenerationConfig(response_mime_type="application/json")
-    )
+# count_tokens() garde le retry par défaut du SDK (contrairement à
+# generate_content, voir _HTTP_OPTIONS_NO_RETRY) : appel gratuit sur un quota
+# séparé (voir ARCHITECTURE.md), le laisser retenter un 503 est sans
+# conséquence sur le quota RPM/RPD et évite de faire échouer une génération
+# pour un simple comptage. Un HttpOptions() vide (sans retry_options) écrase
+# ici le retry_options=attempts:1 hérité du Client (configure()), qui
+# s'appliquerait sinon à tous les appels y compris celui-ci.
+_COUNT_TOKENS_CONFIG = genai_types.CountTokensConfig(http_options=genai_types.HttpOptions())
 
 
 def count_tokens(text: str, context_label: str = "") -> int:
@@ -166,11 +211,10 @@ def count_tokens(text: str, context_label: str = "") -> int:
     voir ARCHITECTURE.md). Journalisé comme les appels de génération pour
     pouvoir corréler chaque appel réseau de l'application avec le dashboard
     AI Studio en cas d'écart de compteur."""
-    model = _get_model()
     start = time.monotonic()
     _api_call_totals["count_tokens"] += 1
     try:
-        result = model.count_tokens(text)
+        result = _client.models.count_tokens(model=MODEL_NAME, contents=text, config=_COUNT_TOKENS_CONFIG)
     except Exception as exc:
         _log_api_call(
             f"count_tokens ECHEC contexte={context_label} {type(exc).__name__}: {_one_line(exc)} "
@@ -263,6 +307,38 @@ def log_api_event(message: str) -> None:
     _log_api_call(message)
 
 
+
+# Nombre de générations ("generation DEBUT") conservées dans
+# api_requests.log : au-delà, la plus ancienne est purgée (voir
+# _trim_api_requests_log) pour que le fichier reste toujours de taille
+# raisonnable à relire ou à transmettre pour diagnostic.
+API_REQUESTS_LOG_MAX_GENERATIONS = 5
+
+
+def _trim_api_requests_log() -> None:
+    """Purge la génération la plus ancienne de debug_logs/api_requests.log
+    quand le fichier en contient déjà API_REQUESTS_LOG_MAX_GENERATIONS avant
+    même de démarrer la nouvelle : chaque génération commence par une ligne
+    'generation DEBUT', qui sert de repère de découpage. Ne garde que ce qui
+    suit la 2e occurrence de ce repère, supprimant ainsi le bloc complet du
+    plus ancien livre (y compris un éventuel 'application DEMARRAGE' initial
+    qui le précédait). Best-effort, comme le reste du journal : une erreur
+    d'écriture ici ne doit jamais empêcher la génération de démarrer."""
+    try:
+        log_path = config.get_debug_logs_dir() / "api_requests.log"
+        lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError:
+        return
+    debut_indices = [i for i, line in enumerate(lines) if " generation DEBUT " in line]
+    if len(debut_indices) < API_REQUESTS_LOG_MAX_GENERATIONS:
+        return
+    cutoff = debut_indices[1]
+    try:
+        log_path.write_text("".join(lines[cutoff:]), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _log_api_call(message: str) -> None:
     """Journal d'appels API : une ligne horodatée par événement (envoi,
     succès, échec de chaque appel réseau à Gemini, y compris les comptages de
@@ -271,8 +347,10 @@ def _log_api_call(message: str) -> None:
     requêtes quotidiennes et celui du dashboard AI Studio (le dashboard
     comptait environ le double) : ce journal donne la liste exacte et datée
     de ce que l'application a réellement envoyé, à comparer avec le
-    dashboard. Écriture best-effort : ne doit jamais faire échouer un appel
-    ni la génération."""
+    dashboard. Purgé au-delà de API_REQUESTS_LOG_MAX_GENERATIONS générations
+    (voir _trim_api_requests_log) pour rester exploitable et transmissible
+    sans grossir indéfiniment. Écriture best-effort : ne doit jamais faire
+    échouer un appel ni la génération."""
     try:
         log_path = config.get_debug_logs_dir() / "api_requests.log"
         timestamp = datetime.now().isoformat(timespec="seconds")
@@ -283,9 +361,9 @@ def _log_api_call(message: str) -> None:
 
 
 def _call_gemini(
-    model: genai.GenerativeModel,
     prompt: str,
     quota_tracker: QuotaTracker,
+    json_mode: bool,
     on_quota_update: QuotaCallback | None = None,
     estimated_input_tokens: int = 0,
     context_label: str = "",
@@ -325,40 +403,44 @@ def _call_gemini(
     start = time.monotonic()
     try:
         try:
-            # request_options={"retry": None} désactive le retry automatique
-            # intégré à la bibliothèque google-generativeai (par défaut :
-            # nouvelles tentatives silencieuses sur 503 ServiceUnavailable,
-            # backoff 1 à 10 s, pendant jusqu'à 10 min - voir
-            # generative_service/transports/base.py du paquet installé).
-            # Chaque tentative supplémentaire était une vraie requête comptée
-            # par Google (RPM/RPD) mais invisible pour l'application, donc
-            # impossible à suivre localement (piste découverte le 2026-07-21
-            # en cherchant un écart entre compteur local et dashboard). Sans
-            # lui, un appel applicatif = exactement une requête serveur,
-            # conformément au choix "sans retry automatique" ci-dessus.
-            response = model.generate_content(prompt, request_options={"retry": None})
+            # _HTTP_OPTIONS_NO_RETRY (voir configure()) désactive le retry
+            # automatique intégré au SDK (par défaut : nouvelles tentatives
+            # silencieuses sur 408/429/5xx). Chaque tentative supplémentaire
+            # était une vraie requête comptée par Google (RPM/RPD) mais
+            # invisible pour l'application, donc impossible à suivre
+            # localement (piste découverte le 2026-07-21 en cherchant un
+            # écart entre compteur local et dashboard, avec l'ancien SDK
+            # google-generativeai - même risque avec google-genai si le
+            # retry par défaut restait actif). Sans lui, un appel applicatif
+            # = exactement une requête serveur.
+            config = _JSON_GENERATION_CONFIG if json_mode else None
+            response = _client.models.generate_content(model=MODEL_NAME, contents=prompt, config=config)
             usage = response.usage_metadata
-            snapshot = quota_tracker.record_call(
-                input_tokens=usage.prompt_token_count,
-                output_tokens=usage.candidates_token_count,
-            )
+            # candidates_token_count peut être None (constaté le 2026-07-21
+            # avec google-genai sur une réponse très courte), contrairement à
+            # l'ancien SDK qui garantissait toujours un entier : ramené à 0
+            # pour ne pas faire échouer le suivi de quota local sur un cas qui
+            # n'est pourtant pas une erreur.
+            input_tokens = usage.prompt_token_count or 0
+            output_tokens = usage.candidates_token_count or 0
+            snapshot = quota_tracker.record_call(input_tokens=input_tokens, output_tokens=output_tokens)
             _log_api_call(
-                f"generate_content OK contexte={context_label} tokens_entree={usage.prompt_token_count} "
-                f"tokens_sortie={usage.candidates_token_count} duree={time.monotonic() - start:.1f}s "
+                f"generate_content OK contexte={context_label} tokens_entree={input_tokens} "
+                f"tokens_sortie={output_tokens} duree={time.monotonic() - start:.1f}s "
                 f"requetes_jour={snapshot.requests_today}"
             )
-            try:
-                text = response.text
-            except ValueError as exc:
-                # Levée par la bibliothèque quand aucun candidat exploitable
-                # n'est retourné, notamment si les filtres de sécurité de
-                # Gemini ont bloqué la réponse : sans ce cas, l'utilisateur
-                # voyait un message technique brut au lieu d'une explication.
-                raise GeminiError(tr("gemini_errors.blocked_by_safety_filters")) from exc
+            text = response.text
             if not text:
+                # response.text vaut None (pas d'exception, contrairement à
+                # l'ancien SDK) quand aucun candidat exploitable n'est
+                # retourné, notamment si les filtres de sécurité de Gemini
+                # ont bloqué la réponse : sans ce cas, l'utilisateur voyait
+                # un message technique brut au lieu d'une explication.
+                if response.candidates and response.candidates[0].finish_reason not in (None, "STOP"):
+                    raise GeminiError(tr("gemini_errors.blocked_by_safety_filters"))
                 raise GeminiError(tr("gemini_errors.empty_response"))
             return text
-        except (ResourceExhausted, ServiceUnavailable, InternalServerError, DeadlineExceeded, PermissionDenied, Unauthenticated) as exc:
+        except genai_errors.APIError as exc:
             snapshot = quota_tracker.record_call(input_tokens=estimated_input_tokens, output_tokens=0)
             _log_api_call(
                 f"generate_content ECHEC contexte={context_label} {type(exc).__name__}: {_one_line(exc)} "
@@ -841,6 +923,13 @@ def _try_repair_internal_stutter(lines: list[str]) -> tuple[dict, str] | None:
     return None
 
 
+
+# Nombre de fichiers gemini_unparsable_*.txt conservés dans debug_logs/ : au-
+# delà, les plus anciens sont purgés (voir _log_unparsable_response) pour ne
+# pas accumuler indéfiniment un fichier par échec de parsing.
+UNPARSABLE_LOGS_MAX_FILES = 5
+
+
 def _log_unparsable_response(raw_text: str, context_label: str, error: json.JSONDecodeError) -> None:
     """Sauvegarde la réponse Gemini brute qui a fait échouer tout parsing (y
     compris la tentative de réparation du bégaiement), pour diagnostic après
@@ -866,6 +955,12 @@ def _log_unparsable_response(raw_text: str, context_label: str, error: json.JSON
         # ligne, le journal montrerait un OK suivi d'aucune FIN, sans
         # explication visible dans la chronologie.
         _log_api_call(f"reponse_illisible contexte={context_label} fichier={log_path.name}")
+        # Le contexte (variable) précède le timestamp dans le nom de fichier,
+        # donc un tri par nom mélangerait les contextes entre eux : on trie
+        # par date de modification pour retrouver les plus anciens.
+        existing = sorted(logs_dir.glob("gemini_unparsable_*.txt"), key=lambda p: p.stat().st_mtime)
+        for old_path in existing[:-UNPARSABLE_LOGS_MAX_FILES]:
+            old_path.unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -1004,6 +1099,7 @@ def generate_book_report(
     que ces totaux ne soient jamais perdus - c'est précisément dans les
     générations qui échouent qu'on en a le plus besoin."""
     _reset_api_call_totals()
+    _trim_api_requests_log()
     _log_api_call(
         f"generation DEBUT livre={_one_line(content.book_title)} modele={MODEL_NAME} "
         f"reprise_lots_deja_faits={resume_batches_done} "
@@ -1047,18 +1143,15 @@ def _generate_book_report_impl(
         if on_progress:
             on_progress(done, total, message)
 
-    json_model = _get_json_model()
-
     def call(
         prompt: str,
         context_label: str,
-        model: genai.GenerativeModel = json_model,
         estimated_input_tokens: int = 0,
     ) -> str:
         return _call_gemini(
-            model,
             prompt,
             quota_tracker=quota_tracker,
+            json_mode=True,
             on_quota_update=on_quota_update,
             estimated_input_tokens=estimated_input_tokens,
             context_label=context_label,

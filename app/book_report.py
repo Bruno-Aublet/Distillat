@@ -10,12 +10,10 @@ from app.i18n import tr
 
 FILE_FORMAT_VERSION = 2
 
-# Caractères, en plus des lettres/chiffres, autorisés dans un nom de fichier
-# généré automatiquement. Exclut uniquement les caractères réellement
-# interdits par Windows (< > : " / \ | ? *), pas la ponctuation courante des
-# titres de livres (parenthèses, virgule, point, apostrophe droite ' ou
-# typographique '...).
-SAFE_FILENAME_EXTRA_CHARS = " -_(),.'’!"
+# Caractères réellement interdits par Windows dans un nom de fichier, plus
+# les caractères de contrôle (0x00-0x1F). Tout le reste est autorisé, y
+# compris la ponctuation la moins courante (&, #, $, %, @, +, =, ...).
+_FORBIDDEN_FILENAME_CHARS = frozenset('<>:"/\\|?*') | {chr(c) for c in range(0x20)}
 
 # Noms de fichier réservés par Windows, quelle que soit leur extension.
 _RESERVED_WINDOWS_NAMES = frozenset(
@@ -25,10 +23,11 @@ _RESERVED_WINDOWS_NAMES = frozenset(
 
 def sanitize_filename(base: str, fallback: str | None = None) -> str:
     """Retire d'une chaîne les caractères interdits dans un nom de fichier
-    Windows, en conservant la ponctuation courante des titres de livres."""
+    Windows, en conservant tous les autres caractères (y compris ponctuation
+    et accents)."""
     if fallback is None:
         fallback = tr("book_report.fallback_filename")
-    safe_base = "".join(c for c in base if c.isalnum() or c in SAFE_FILENAME_EXTRA_CHARS).strip()
+    safe_base = "".join(c for c in base if c not in _FORBIDDEN_FILENAME_CHARS).strip()
     # Windows tronque silencieusement les points/espaces finaux d'un nom de
     # fichier, et interdit certains noms (CON, NUL, COM1...) quelle que soit
     # leur extension.

@@ -18,7 +18,7 @@ L'application s'appuie sur le palier gratuit de Gemini 3.5 Flash.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.2.2**
+**Version 1.2.3**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
@@ -193,7 +193,9 @@ côté du compteur de requêtes du jour pour signaler qu'elle est bien partie.
 Ce suivi est **local à l'application** : il ne reflète pas l'usage
 réel si la même clé API est utilisée ailleurs en parallèle (un autre outil,
 un test manuel via AI Studio...), auquel cas les compteurs affichés ne
-seront plus fiables.
+seront plus fiables. Il est en revanche propre à chaque clé API : passer
+d'une clé à une autre (bouton **Clé API**) affiche aussitôt le compteur de
+cette clé, sans jamais le mélanger avec celui d'une autre.
 
 Une explication simplifiée de ce fonctionnement, sans jargon technique, est
 également accessible directement dans l'application via le bouton **?** situé
@@ -252,7 +254,7 @@ lors d'une mise à jour) :
 
 - **Clé API** : Gestionnaire d'identification Windows (voir
   [Sécurité de la clé API](#sécurité-de-la-clé-api)).
-- **`.quota_state.json`** (compteur de requêtes du jour), **`quota_limits.json`**
+- **`.quota_state_<hash>.json`** (compteur de requêtes du jour, un fichier par clé API pour ne jamais mélanger deux comptes), **`quota_limits.json`**
   (limites RPM/TPM/RPD personnalisées, si modifiées via le bouton **Limites de
   quota**), **`settings.json`** (regroupe la langue de l'interface choisie, voir
   [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches) ;
@@ -264,10 +266,12 @@ lors d'une mise à jour) :
   livre se termine avec succès) et **`debug_logs\`**
   (fichiers de diagnostic : réponses Gemini brutes sauvegardées
   automatiquement quand une réponse reste illisible même après tentative de
-  réparation automatique, et journal `api_requests.log` consignant chaque
-  appel envoyé à Gemini - horodatage, type d'appel, tokens, durée, résultat,
-  jamais le contenu du livre - pour pouvoir comparer la consommation réelle
-  avec le dashboard Google AI Studio) :
+  réparation automatique (les 5 fichiers les plus récents sont conservés,
+  les plus anciens étant supprimés automatiquement), et journal
+  `api_requests.log` consignant chaque appel envoyé à Gemini - horodatage,
+  type d'appel, tokens, durée, résultat, jamais le contenu du livre - pour
+  pouvoir comparer la consommation réelle avec le dashboard Google AI Studio
+  (ne conserve que les 5 dernières générations de fiche) :
   `%APPDATA%\Distillat\`.
 - **Fiches sauvegardées** (`.distillat.json`) et **exports PDF** :
   `Documents\Distillat\Fiches\` au tout premier usage, puis le dernier dossier
@@ -292,7 +296,7 @@ lors d'une mise à jour) :
   liens « Code source », « Téléchargement » et « Changelog » à droite).
 
 En développement (`python main.py`), tous ces emplacements sont identiques au
-mode compilé, y compris les fichiers techniques (`.quota_state.json`,
+mode compilé, y compris les fichiers techniques (`.quota_state_<hash>.json`,
 `quota_limits.json`, `settings.json`, `.generation_resume_<hash>.json`), désormais
 toujours dans `%APPDATA%\Distillat\` quel que soit le mode de lancement (pour
 que le suivi de quota reflète la même consommation réelle, peu importe la
@@ -334,7 +338,7 @@ The application relies on Gemini 3.5 Flash's free tier.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
 `.zip` file to download is at the bottom of the release page).
 
-**Version 1.2.2**
+**Version 1.2.3**
 
 Windows application with a PyQt5 interface to generate a complete reading
 report (summaries, characters, analysis) from an EPUB or PDF book, via the
@@ -497,7 +501,9 @@ indicator appears next to the daily request counter to show it was indeed
 sent. This tracking is **local to the application**: it does not reflect
 actual usage if the same API key is used elsewhere in parallel (another
 tool, a manual test via AI Studio...), in which case the displayed counters
-will no longer be accurate.
+will no longer be accurate. It is however specific to each API key:
+switching from one key to another (**API key** button) immediately shows
+that key's own counter, never mixed with another one's.
 
 A simplified, jargon-free explanation of how this works is also available
 directly in the application via the **?** button next to the generation
@@ -555,7 +561,7 @@ update):
 
 - **API key**: Windows Credential Manager (see
   [API key security](#api-key-security)).
-- **`.quota_state.json`** (today's request counter), **`quota_limits.json`**
+- **`.quota_state_<hash>.json`** (today's request counter, one file per API key so two accounts are never mixed), **`quota_limits.json`**
   (custom RPM/TPM/RPD limits, if changed via the **Quota limits** button),
   **`settings.json`** (groups together the chosen interface language, see
   [Interface and report language](#interface-and-report-language); custom
@@ -567,10 +573,11 @@ update):
   successfully) and
   **`debug_logs\`** (diagnostic files: raw Gemini responses saved
   automatically when a response stays unreadable even after an automatic
-  repair attempt, and an `api_requests.log` journal recording every call
-  sent to Gemini - timestamp, call type, tokens, duration, outcome, never
-  the book content itself - so actual consumption can be compared with the
-  Google AI Studio dashboard):
+  repair attempt (only the 5 most recent files are kept, older ones being
+  deleted automatically), and an `api_requests.log` journal recording every
+  call sent to Gemini - timestamp, call type, tokens, duration, outcome,
+  never the book content itself - so actual consumption can be compared with
+  the Google AI Studio dashboard (keeps only the last 5 report generations)):
   `%APPDATA%\Distillat\`.
 - **Saved reports** (`.distillat.json`) and **PDF exports**:
   `Documents\Distillat\Fiches\` on first use, then the last folder used for
@@ -594,7 +601,7 @@ update):
   "Source code", "Download", and "Changelog" links on the right).
 
 In development (`python main.py`), all these locations are identical to the
-compiled mode, including the technical files (`.quota_state.json`,
+compiled mode, including the technical files (`.quota_state_<hash>.json`,
 `quota_limits.json`, `settings.json`, `.generation_resume_<hash>.json`), now always
 in `%APPDATA%\Distillat\` regardless of the launch mode (so that quota
 tracking reflects the same actual consumption, no matter how the application
