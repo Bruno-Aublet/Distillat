@@ -57,12 +57,11 @@ class SummarizeWorker(QThread):
             def on_quota_update(snapshot: QuotaSnapshot) -> None:
                 self.quota_updated.emit(snapshot)
 
+            book_hash = generation_resume.compute_book_hash(content.full_text)
+
             resume_summaries = None
             resume_batches_done = 0
-            if (
-                self.resume_state is not None
-                and self.resume_state.book_hash == generation_resume.compute_book_hash(content.full_text)
-            ):
+            if self.resume_state is not None and self.resume_state.book_hash == book_hash:
                 resume_summaries = self.resume_state.chapter_summaries
                 resume_batches_done = self.resume_state.batches_done
 
@@ -74,7 +73,7 @@ class SummarizeWorker(QThread):
                 resume_chapter_summaries=resume_summaries,
                 resume_batches_done=resume_batches_done,
             )
-            generation_resume.clear_resume_state(settings_dir)
+            generation_resume.clear_resume_state(settings_dir, book_hash)
             self.finished_ok.emit(result)
         except PartialGenerationError as exc:
             generation_resume.save_resume_state(

@@ -21,6 +21,7 @@ def main() -> None:
 
     window = MainWindow()
     window.show()
+    window._offer_pending_resumes()
 
     sys.exit(app.exec_())
 

@@ -1,5 +1,6 @@
 """Fenêtre principale de l'application Distillat."""
 import os
+import platform
 import re
 import webbrowser
 from pathlib import Path
@@ -26,6 +27,8 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -40,9 +43,9 @@ from PyQt5.QtWidgets import (
 from app import config, generation_resume, i18n
 from app.__version__ import VERSION
 from app.i18n import tr
-from app.update_checker import check_for_updates_on_startup, releases_page_url
+from app.update_checker import check_for_updates_on_startup, releases_page_url, repo_page_url
 from app.book_report import BookReport, Character, sanitize_filename
-from app.gemini_client import MODEL_NAME, default_prompt_templates
+from app.gemini_client import MODEL_NAME, default_prompt_templates, log_api_event
 from app.pdf_export import export_book_report_to_pdf
 from app.prompts_store import load_custom_prompts, save_custom_prompts
 from app.quota_tracker import QuotaSnapshot, QuotaTracker, save_quota_limits
@@ -73,9 +76,43 @@ class LicenseDialog(QDialog):
             )
         layout.addWidget(license_view)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
-        buttons.accepted.connect(self.accept)
-        layout.addWidget(buttons)
+        ok_row = QHBoxLayout()
+        ok_row.addStretch()
+        ok_button = QPushButton(tr("license_dialog.ok_button"))
+        ok_button.clicked.connect(self.accept)
+        ok_row.addWidget(ok_button)
+        layout.addLayout(ok_row)
+
+
+class ChangelogDialog(QDialog):
+    """Affiche le contenu du fichier CHANGELOG.md à la racine du projet."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowTitle(tr("changelog_dialog.window_title"))
+        self.resize(650, 550)
+
+        layout = QVBoxLayout(self)
+
+        changelog_view = QTextEdit()
+        changelog_view.setReadOnly(True)
+
+        changelog_path = config.get_resource_dir() / "CHANGELOG.md"
+        try:
+            changelog_view.setPlainText(changelog_path.read_text(encoding="utf-8"))
+        except OSError:
+            changelog_view.setPlainText(
+                tr("changelog_dialog.file_not_found", changelog_path=changelog_path)
+            )
+        layout.addWidget(changelog_view)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close_button = QPushButton(tr("changelog_dialog.close_button"))
+        close_button.clicked.connect(self.close)
+        close_row.addWidget(close_button)
+        layout.addLayout(close_row)
 
 
 class ExtraTextDialog(QDialog):
@@ -104,10 +141,12 @@ class ExtraTextDialog(QDialog):
         text_view.setReadOnly(True)
         layout.addWidget(text_view)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.close)
-        buttons.button(QDialogButtonBox.Close).clicked.connect(self.close)
-        layout.addWidget(buttons)
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close_button = QPushButton(tr("extra_text_dialog.close_button"))
+        close_button.clicked.connect(self.close)
+        close_row.addWidget(close_button)
+        layout.addLayout(close_row)
 
 
 def _draw_eye_icon(color: str, slashed: bool) -> QIcon:
@@ -570,6 +609,104 @@ class AutoHeightTextEdit(QTextEdit):
             self.setFixedHeight(int(height))
 
 
+class PendingResumesDialog(QDialog):
+    """Liste au démarrage les livres dont une génération précédente s'est
+    arrêtée en cours de route (voir generation_resume), pour proposer de
+    reprendre l'un d'eux là où il en était plutôt que de reformuler depuis le
+    début les lots de chapitres déjà résumés avec succès."""
+
+    def __init__(self, states: list, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowTitle(tr("pending_resumes_dialog.window_title"))
+        self.setMinimumWidth(480)
+        self.selected_state = None
+        self.states_to_clear: list = []
+
+        self._states = states
+
+        layout = QVBoxLayout(self)
+
+        intro = QLabel(tr("pending_resumes_dialog.intro"))
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.list_widget = QListWidget()
+        for state in states:
+            book_exists = Path(state.book_path).exists()
+            label = tr(
+                "pending_resumes_dialog.item_label",
+                filename=os.path.basename(state.book_path),
+                batches_done=state.batches_done,
+                batches_total=state.batches_total,
+            )
+            if not book_exists:
+                label += " " + tr("pending_resumes_dialog.item_missing_suffix")
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, state)
+            if not book_exists:
+                item.setForeground(QColor("#b02a2a"))
+            self.list_widget.addItem(item)
+        self.list_widget.currentRowChanged.connect(self._on_selection_changed)
+        layout.addWidget(self.list_widget)
+
+        buttons_layout = QHBoxLayout()
+
+        self.delete_button = QPushButton(tr("pending_resumes_dialog.delete_button"))
+        self.delete_button.setEnabled(False)
+        self.delete_button.clicked.connect(self._on_delete_clicked)
+        buttons_layout.addWidget(self.delete_button)
+
+        buttons_layout.addStretch(1)
+
+        self.close_button = QPushButton(tr("pending_resumes_dialog.close_button"))
+        self.close_button.clicked.connect(self.reject)
+        buttons_layout.addWidget(self.close_button)
+
+        self.resume_button = QPushButton(tr("pending_resumes_dialog.resume_button"))
+        self.resume_button.setEnabled(False)
+        self.resume_button.clicked.connect(self._on_resume_clicked)
+        buttons_layout.addWidget(self.resume_button)
+
+        layout.addLayout(buttons_layout)
+
+        if self.list_widget.count() > 0:
+            self.list_widget.setCurrentRow(0)
+
+        self.delete_button.setAutoDefault(False)
+        self.close_button.setAutoDefault(False)
+        self.resume_button.setAutoDefault(False)
+        self.close_button.setFocus()
+
+    def _current_state(self):
+        item = self.list_widget.currentItem()
+        if item is None:
+            return None
+        return item.data(Qt.UserRole)
+
+    def _on_selection_changed(self, row: int) -> None:
+        state = self._current_state()
+        self.delete_button.setEnabled(state is not None)
+        self.resume_button.setEnabled(state is not None and Path(state.book_path).exists())
+
+    def _on_delete_clicked(self) -> None:
+        state = self._current_state()
+        if state is None:
+            return
+        self.states_to_clear.append(state)
+        row = self.list_widget.currentRow()
+        self.list_widget.takeItem(row)
+        if self.list_widget.count() == 0:
+            self.reject()
+
+    def _on_resume_clicked(self) -> None:
+        state = self._current_state()
+        if state is None:
+            return
+        self.selected_state = state
+        self.accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -589,6 +726,19 @@ class MainWindow(QMainWindow):
         self.quota_tracker = QuotaTracker(
             daily_state_path=config.get_settings_dir() / ".quota_state.json",
             settings_dir=config.get_settings_dir(),
+        )
+        # Ligne de session dans le journal d'appels API : délimite les
+        # lancements de l'application (version, processus, machine, compteur
+        # quotidien tel que rechargé du disque), pour situer chaque
+        # génération dans sa session et rendre détectable un double lancement
+        # simultané (deux lignes DEMARRAGE avec des pid différents sans
+        # fermeture entre). Le nom de la machine permet d'attribuer son
+        # origine à un log recueilli sur un autre PC (ex : tests croisés sur
+        # la machine d'un tiers avec sa propre clé API).
+        log_api_event(
+            f"application DEMARRAGE version={VERSION} pid={os.getpid()} "
+            f"machine={platform.node()} "
+            f"requetes_jour_chargees={self.quota_tracker.snapshot().requests_today}"
         )
 
         self._latest_version_available: str | None = None
@@ -627,9 +777,10 @@ class MainWindow(QMainWindow):
         width = min(target_width, available.width())
         height = min(target_height, available.height())
         self.resize(width, height)
+        vertical_margin = max(0, (available.height() - height) // 2 - 40)
         self.move(
             available.x() + (available.width() - width) // 2,
-            available.y() + (available.height() - height) // 2,
+            available.y() + vertical_margin,
         )
 
     def _on_language_changed(self, index: int) -> None:
@@ -675,6 +826,9 @@ class MainWindow(QMainWindow):
         self.close_report_button.setText(tr("main_window.close_report_button"))
         self.save_button.setText(tr("main_window.export_pdf_button"))
         self.footer_button.setText(tr("main_window.footer_button"))
+        self.source_code_link_button.setText(tr("main_window.source_code_link"))
+        self.download_link_button.setText(tr("main_window.download_link"))
+        self.changelog_link_button.setText(tr("main_window.changelog_link"))
         if not self.last_result:
             self.cover_label.setText(tr("main_window.no_cover"))
         self.summary_view.setPlaceholderText(tr("main_window.summary_placeholder"))
@@ -862,12 +1016,7 @@ class MainWindow(QMainWindow):
         self._build_characters_tab()
         self._build_analysis_tab()
 
-        footer_row = QHBoxLayout()
-        footer_row.setContentsMargins(0, -10, 0, 0)
-        self.footer_button = QPushButton(tr("main_window.footer_button"))
-        self.footer_button.setCursor(Qt.PointingHandCursor)
-        self.footer_button.setStyleSheet(
-            """
+        footer_link_style = """
             QPushButton {
                 color: #999;
                 font-size: 11px;
@@ -881,10 +1030,34 @@ class MainWindow(QMainWindow):
                 text-decoration: underline;
             }
             """
-        )
+
+        footer_row = QHBoxLayout()
+        footer_row.setContentsMargins(0, -10, 0, 0)
+        self.footer_button = QPushButton(tr("main_window.footer_button"))
+        self.footer_button.setCursor(Qt.PointingHandCursor)
+        self.footer_button.setStyleSheet(footer_link_style)
         self.footer_button.clicked.connect(self._on_show_license)
         footer_row.addWidget(self.footer_button)
         footer_row.addStretch()
+
+        self.source_code_link_button = QPushButton(tr("main_window.source_code_link"))
+        self.source_code_link_button.setCursor(Qt.PointingHandCursor)
+        self.source_code_link_button.setStyleSheet(footer_link_style)
+        self.source_code_link_button.clicked.connect(self._on_open_repo_page)
+        footer_row.addWidget(self.source_code_link_button)
+
+        self.download_link_button = QPushButton(tr("main_window.download_link"))
+        self.download_link_button.setCursor(Qt.PointingHandCursor)
+        self.download_link_button.setStyleSheet(footer_link_style)
+        self.download_link_button.clicked.connect(self._on_open_releases_page)
+        footer_row.addWidget(self.download_link_button)
+
+        self.changelog_link_button = QPushButton(tr("main_window.changelog_link"))
+        self.changelog_link_button.setCursor(Qt.PointingHandCursor)
+        self.changelog_link_button.setStyleSheet(footer_link_style)
+        self.changelog_link_button.clicked.connect(self._on_show_changelog)
+        footer_row.addWidget(self.changelog_link_button)
+
         layout.addLayout(footer_row)
 
     def _build_cover_tab(self) -> None:
@@ -1093,6 +1266,12 @@ class MainWindow(QMainWindow):
 
     def _on_show_license(self) -> None:
         LicenseDialog(self).exec_()
+
+    def _on_show_changelog(self) -> None:
+        ChangelogDialog(self).exec_()
+
+    def _on_open_repo_page(self) -> None:
+        webbrowser.open(repo_page_url())
 
     def show_update_banner(self, latest_version: str) -> None:
         self._latest_version_available = latest_version
@@ -1314,6 +1493,28 @@ class MainWindow(QMainWindow):
         else:
             event.ignore()
 
+    def _offer_pending_resumes(self) -> None:
+        states = generation_resume.load_all_resume_states(config.get_settings_dir())
+        if not states:
+            return
+
+        dialog = PendingResumesDialog(states, self)
+        accepted = dialog.exec_() == QDialog.Accepted
+
+        for cleared_state in dialog.states_to_clear:
+            generation_resume.clear_resume_state(config.get_settings_dir(), cleared_state.book_hash)
+
+        if accepted and dialog.selected_state is not None:
+            self._on_file_selected(dialog.selected_state.book_path)
+
+    def _find_resume_state_for(self, book_path: str | None) -> generation_resume.ResumeState | None:
+        if not book_path:
+            return None
+        for state in generation_resume.load_all_resume_states(config.get_settings_dir()):
+            if state.book_path == book_path:
+                return state
+        return None
+
     def _on_summarize_clicked(self) -> None:
         if not self.selected_book_path:
             return
@@ -1325,31 +1526,7 @@ class MainWindow(QMainWindow):
         if not api_key:
             return
 
-        resume_state = generation_resume.load_resume_state(config.get_settings_dir())
-        if resume_state is not None and resume_state.book_path == self.selected_book_path:
-            resume_box = QMessageBox(self)
-            resume_box.setIcon(QMessageBox.Question)
-            resume_box.setWindowTitle(tr("main_window.resume_dialog.window_title"))
-            resume_box.setText(
-                tr(
-                    "main_window.resume_dialog.text",
-                    batches_done=resume_state.batches_done,
-                    batches_total=resume_state.batches_total,
-                )
-            )
-            resume_button = resume_box.addButton(
-                tr("main_window.resume_dialog.resume_button"), QMessageBox.AcceptRole
-            )
-            restart_button = resume_box.addButton(
-                tr("main_window.resume_dialog.restart_button"), QMessageBox.RejectRole
-            )
-            resume_box.setDefaultButton(resume_button)
-            resume_box.exec_()
-            if resume_box.clickedButton() is restart_button:
-                generation_resume.clear_resume_state(config.get_settings_dir())
-                resume_state = None
-        else:
-            resume_state = None
+        resume_state = self._find_resume_state_for(self.selected_book_path)
 
         self._set_summarize_button_enabled(False)
         self.save_button.setEnabled(False)
@@ -1414,6 +1591,11 @@ class MainWindow(QMainWindow):
     QUOTA_WARNING_THRESHOLD = 0.8
 
     def _update_quota_display(self, snapshot: QuotaSnapshot) -> None:
+        in_flight_suffix = (
+            tr("main_window.quota_display_in_flight_suffix", count=snapshot.requests_in_flight)
+            if snapshot.requests_in_flight > 0
+            else ""
+        )
         self.quota_label.setText(
             tr(
                 "main_window.quota_display",
@@ -1426,6 +1608,7 @@ class MainWindow(QMainWindow):
                 tpm_limit=f"{snapshot.tpm_limit:,}".replace(",", " "),
                 rpd=snapshot.requests_today,
                 rpd_limit=snapshot.rpd_limit,
+                in_flight_suffix=in_flight_suffix,
             )
         )
         self._check_quota_thresholds(snapshot)
@@ -1569,8 +1752,8 @@ class MainWindow(QMainWindow):
         if error_kind in ("daily_quota", "rate_quota"):
             self.quota_warning_label.setText(tr("main_window.quota_exceeded_warning"))
             self.quota_warning_label.show()
-        resume_state = generation_resume.load_resume_state(config.get_settings_dir())
-        if resume_state is not None and resume_state.book_path == self.selected_book_path:
+        resume_state = self._find_resume_state_for(self.selected_book_path)
+        if resume_state is not None:
             if error_kind == "daily_quota":
                 wait_hint = tr("main_window.resume_wait_hint_daily")
             elif error_kind == "rate_quota":

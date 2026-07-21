@@ -1,7 +1,9 @@
-"""Client Gemini : comptage de tokens, résumé/personnages/analyse, avec retry."""
+"""Client Gemini : comptage de tokens, résumé/personnages/analyse, sans retry."""
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 import google.generativeai as genai
 from google.api_core.exceptions import (
@@ -14,6 +16,7 @@ from google.api_core.exceptions import (
     Unauthenticated,
 )
 
+from app import config
 from app import i18n
 from app.book_report import BookReport, Character
 from app.epub_parser import Chapter, BookContent
@@ -102,9 +105,10 @@ def _extract_quota_blocked_info(exc: ResourceExhausted) -> QuotaBlockedInfo:
 
 
 def _is_daily_quota(quota_id: str | None) -> bool:
-    """Un quota journalier (RPD) ne se réinitialise qu'à minuit : retenter
-    dans les secondes/minutes qui suivent est voué à l'échec, contrairement à
-    un quota par minute (RPM/TPM) qui se libère naturellement en attendant."""
+    """Un quota quotidien (RPD) ne se réinitialise qu'à minuit heure du
+    Pacifique (Californie), pas à minuit heure locale : retenter dans les
+    secondes/minutes qui suivent est voué à l'échec, contrairement à un quota
+    par minute (RPM/TPM) qui se libère naturellement en attendant."""
     return bool(quota_id) and "perday" in quota_id.lower()
 
 
@@ -157,13 +161,31 @@ def _get_json_model() -> genai.GenerativeModel:
     )
 
 
-def count_tokens(text: str) -> int:
+def count_tokens(text: str, context_label: str = "") -> int:
+    """Appel réseau CountTokens (gratuit, quota séparé de generateContent,
+    voir ARCHITECTURE.md). Journalisé comme les appels de génération pour
+    pouvoir corréler chaque appel réseau de l'application avec le dashboard
+    AI Studio en cas d'écart de compteur."""
     model = _get_model()
-    result = model.count_tokens(text)
+    start = time.monotonic()
+    _api_call_totals["count_tokens"] += 1
+    try:
+        result = model.count_tokens(text)
+    except Exception as exc:
+        _log_api_call(
+            f"count_tokens ECHEC contexte={context_label} {type(exc).__name__}: {_one_line(exc)} "
+            f"duree={time.monotonic() - start:.1f}s"
+        )
+        raise
+    _api_call_totals["count_tokens_total_tokens"] += result.total_tokens
+    _log_api_call(
+        f"count_tokens OK contexte={context_label} total_tokens={result.total_tokens} "
+        f"duree={time.monotonic() - start:.1f}s"
+    )
     return result.total_tokens
 
 
-def _split_chapters_into_batches(chapters: list[Chapter]) -> list[list[Chapter]]:
+def _split_chapters_into_batches(chapters: list[Chapter]) -> list[tuple[list[Chapter], int]]:
     """Regroupe les chapitres en lots dont le texte cumulé tient sous
     MAX_TOKENS_PER_REQUEST, la limite de débit par minute du palier gratuit
     (et non MAX_INPUT_TOKENS, la fenêtre de contexte du modèle, bien plus
@@ -171,24 +193,93 @@ def _split_chapters_into_batches(chapters: list[Chapter]) -> list[list[Chapter]]
     lui seul). Un chapitre dont le texte dépasse à lui seul
     MAX_TOKENS_PER_REQUEST forme son propre lot (l'appel Gemini correspondant
     échouera probablement, mais ce n'est pas à cette fonction de tronquer le
-    contenu du livre)."""
-    batches: list[list[Chapter]] = []
+    contenu du livre).
+
+    Chaque lot est retourné avec le compte de tokens de son texte source déjà
+    calculé ici (estimation du prompt final, qui ajoute aussi les consignes du
+    template) : réutilisé tel quel par l'appelant pour créditer le suivi de
+    quota si l'appel Gemini correspondant échoue, sans refaire d'appel
+    count_tokens (donc sans appel réseau) juste pour ça."""
+    batches: list[tuple[list[Chapter], int]] = []
     current_batch: list[Chapter] = []
     current_tokens = 0
 
-    for chapter in chapters:
-        chapter_tokens = count_tokens(chapter.text)
+    for chapter_index, chapter in enumerate(chapters, start=1):
+        chapter_tokens = count_tokens(chapter.text, f"decoupage_chapitre_{chapter_index}/{len(chapters)}")
         if current_batch and current_tokens + chapter_tokens > MAX_TOKENS_PER_REQUEST:
-            batches.append(current_batch)
+            batches.append((current_batch, current_tokens))
             current_batch = []
             current_tokens = 0
         current_batch.append(chapter)
         current_tokens += chapter_tokens
 
     if current_batch:
-        batches.append(current_batch)
+        batches.append((current_batch, current_tokens))
 
     return batches
+
+
+def _one_line(value: object) -> str:
+    """Aplatit un texte (ex : message d'exception multiligne) en une seule
+    ligne, pour que chaque événement du journal d'appels API tienne sur une
+    ligne physique et reste exploitable avec des outils ligne à ligne."""
+    return " ".join(str(value).split())
+
+
+# Totaux d'appels réseau de la génération en cours, restitués dans la ligne
+# FIN (ou ECHEC) du journal d'appels API pour comparaison directe avec le
+# dashboard AI Studio : "generate_content" (les vrais appels, comptés dans le
+# quota RPM/RPD) et "count_tokens" (censés être gratuits et hors quota, mais
+# comptés séparément ici précisément pour pouvoir le vérifier si le dashboard
+# monte plus vite que les seuls appels de génération). Incrémentés à l'envoi
+# (une tentative échouée reste un appel réseau). "count_tokens_total_tokens"
+# cumule le volume de texte soumis au comptage (le total_tokens de chaque
+# réponse CountTokens réussie) : si ces appels s'avéraient comptés dans le
+# TPM du dashboard malgré leur gratuité annoncée, ce cumul donnerait
+# directement le volume à comparer avec le graphe TPM. État module partagé
+# sans verrou : une seule génération à la fois (un seul SummarizeWorker), et
+# seul le thread worker y touche.
+_api_call_totals = {"generate_content": 0, "count_tokens": 0, "count_tokens_total_tokens": 0}
+
+
+def _reset_api_call_totals() -> None:
+    for key in _api_call_totals:
+        _api_call_totals[key] = 0
+
+
+def _api_call_totals_summary() -> str:
+    return (
+        f"appels_generation={_api_call_totals['generate_content']} "
+        f"appels_comptage_tokens={_api_call_totals['count_tokens']} "
+        f"tokens_soumis_au_comptage={_api_call_totals['count_tokens_total_tokens']}"
+    )
+
+
+def log_api_event(message: str) -> None:
+    """Point d'entrée public du journal d'appels API pour les événements émis
+    hors de ce module (ex : ligne de démarrage de l'application, écrite par
+    main_window) : même fichier, même format ligne à ligne horodatée que les
+    événements d'appel écrits ici."""
+    _log_api_call(message)
+
+
+def _log_api_call(message: str) -> None:
+    """Journal d'appels API : une ligne horodatée par événement (envoi,
+    succès, échec de chaque appel réseau à Gemini, y compris les comptages de
+    tokens), en append dans debug_logs/api_requests.log. Ajouté le 2026-07-21
+    pour diagnostiquer un écart inexpliqué entre le compteur local de
+    requêtes quotidiennes et celui du dashboard AI Studio (le dashboard
+    comptait environ le double) : ce journal donne la liste exacte et datée
+    de ce que l'application a réellement envoyé, à comparer avec le
+    dashboard. Écriture best-effort : ne doit jamais faire échouer un appel
+    ni la génération."""
+    try:
+        log_path = config.get_debug_logs_dir() / "api_requests.log"
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        with log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write(f"{timestamp} {message}\n")
+    except OSError:
+        pass
 
 
 def _call_gemini(
@@ -196,34 +287,89 @@ def _call_gemini(
     prompt: str,
     quota_tracker: QuotaTracker,
     on_quota_update: QuotaCallback | None = None,
+    estimated_input_tokens: int = 0,
+    context_label: str = "",
 ) -> str:
     """Effectue un seul appel à l'API Gemini, sans retry automatique : toute
     erreur (quota, service indisponible...) remonte immédiatement sous forme
     de GeminiError avec un message clair, laissant à l'utilisateur le choix
-    de relancer la génération en recliquant sur Résumer."""
+    de relancer la génération en recliquant sur Résumer.
+
+    Le suivi de quota (record_call) est crédité que l'appel réussisse ou
+    échoue : Google comptabilise la requête (RPM/RPD) côté serveur dès qu'elle
+    est reçue, indépendamment du résultat, donc le suivi local doit faire de
+    même pour ne pas diverger du dashboard Google (bug constaté le
+    2026-07-21). En cas d'échec, usage_metadata n'existe pas (pas de réponse
+    exploitable) : estimated_input_tokens sert alors d'estimation des tokens
+    d'entrée envoyés, à charge pour l'appelant de le renseigner via
+    count_tokens() sur le prompt (appel gratuit, hors quota RPM/RPD/TPM,
+    vérifié empiriquement le 2026-07-21 : le compteur RPD du dashboard Google
+    ne bouge pas après un count_tokens). Les tokens de sortie restent à 0
+    puisque Gemini n'a rien généré.
+
+    record_call() ne pouvant être crédité qu'une fois l'appel revenu (succès
+    ou échec), le compteur RPD/RPM affiché restait figé pendant toute la
+    durée de l'appel réseau (jusqu'à plusieurs minutes pour un gros livre),
+    au point de sembler ne pas bouger du tout à l'envoi d'une requête sur un
+    livre tenant en une seule requête (constaté par l'utilisateur le
+    2026-07-21). begin_request()/end_request() encadrent donc tout l'appel
+    pour permettre à l'UI d'afficher un indicateur "requête en attente"
+    distinct du compteur RPD/RPM lui-même, sans jamais influencer ce dernier."""
+    quota_tracker.begin_request()
+    if on_quota_update:
+        on_quota_update(quota_tracker.snapshot())
+    _log_api_call(
+        f"generate_content ENVOI contexte={context_label} tokens_entree_estimes={estimated_input_tokens}"
+    )
+    _api_call_totals["generate_content"] += 1
+    start = time.monotonic()
     try:
-        response = model.generate_content(prompt)
-        usage = response.usage_metadata
-        snapshot = quota_tracker.record_call(
-            input_tokens=usage.prompt_token_count,
-            output_tokens=usage.candidates_token_count,
-        )
+        try:
+            # request_options={"retry": None} désactive le retry automatique
+            # intégré à la bibliothèque google-generativeai (par défaut :
+            # nouvelles tentatives silencieuses sur 503 ServiceUnavailable,
+            # backoff 1 à 10 s, pendant jusqu'à 10 min - voir
+            # generative_service/transports/base.py du paquet installé).
+            # Chaque tentative supplémentaire était une vraie requête comptée
+            # par Google (RPM/RPD) mais invisible pour l'application, donc
+            # impossible à suivre localement (piste découverte le 2026-07-21
+            # en cherchant un écart entre compteur local et dashboard). Sans
+            # lui, un appel applicatif = exactement une requête serveur,
+            # conformément au choix "sans retry automatique" ci-dessus.
+            response = model.generate_content(prompt, request_options={"retry": None})
+            usage = response.usage_metadata
+            snapshot = quota_tracker.record_call(
+                input_tokens=usage.prompt_token_count,
+                output_tokens=usage.candidates_token_count,
+            )
+            _log_api_call(
+                f"generate_content OK contexte={context_label} tokens_entree={usage.prompt_token_count} "
+                f"tokens_sortie={usage.candidates_token_count} duree={time.monotonic() - start:.1f}s "
+                f"requetes_jour={snapshot.requests_today}"
+            )
+            try:
+                text = response.text
+            except ValueError as exc:
+                # Levée par la bibliothèque quand aucun candidat exploitable
+                # n'est retourné, notamment si les filtres de sécurité de
+                # Gemini ont bloqué la réponse : sans ce cas, l'utilisateur
+                # voyait un message technique brut au lieu d'une explication.
+                raise GeminiError(tr("gemini_errors.blocked_by_safety_filters")) from exc
+            if not text:
+                raise GeminiError(tr("gemini_errors.empty_response"))
+            return text
+        except (ResourceExhausted, ServiceUnavailable, InternalServerError, DeadlineExceeded, PermissionDenied, Unauthenticated) as exc:
+            snapshot = quota_tracker.record_call(input_tokens=estimated_input_tokens, output_tokens=0)
+            _log_api_call(
+                f"generate_content ECHEC contexte={context_label} {type(exc).__name__}: {_one_line(exc)} "
+                f"duree={time.monotonic() - start:.1f}s requetes_jour={snapshot.requests_today}"
+            )
+            message, error_kind = _friendly_error_message(exc)
+            raise GeminiError(message, error_kind=error_kind) from exc
+    finally:
+        snapshot = quota_tracker.end_request()
         if on_quota_update:
             on_quota_update(snapshot)
-        try:
-            text = response.text
-        except ValueError as exc:
-            # Levée par la bibliothèque quand aucun candidat exploitable
-            # n'est retourné, notamment si les filtres de sécurité de
-            # Gemini ont bloqué la réponse : sans ce cas, l'utilisateur
-            # voyait un message technique brut au lieu d'une explication.
-            raise GeminiError(tr("gemini_errors.blocked_by_safety_filters")) from exc
-        if not text:
-            raise GeminiError(tr("gemini_errors.empty_response"))
-        return text
-    except (ResourceExhausted, ServiceUnavailable, InternalServerError, DeadlineExceeded, PermissionDenied, Unauthenticated) as exc:
-        message, error_kind = _friendly_error_message(exc)
-        raise GeminiError(message, error_kind=error_kind) from exc
 
 
 DEFAULT_FULL_REPORT_PROMPT = """Tu es un assistant expert en littérature. Voici le texte intégral d'un livre \
@@ -541,7 +687,7 @@ def _chapters_batch_text(chapters: list[Chapter]) -> str:
 def _chapter_summary_prompt(book_title: str, author: str, batch: list[Chapter], use_custom_prompts: bool) -> str:
     """Prompt de résumé appliqué à un LOT de chapitres consécutifs (voir
     _split_chapters_into_batches) plutôt qu'à un seul, pour limiter le nombre
-    de requêtes envoyées à l'API sur le palier gratuit (quota journalier très
+    de requêtes envoyées à l'API sur le palier gratuit (quota quotidien très
     serré : 20 requêtes/jour par défaut)."""
     template = _get_prompt_template("chapter_summary", use_custom_prompts)
     return _format_prompt_template(
@@ -579,7 +725,112 @@ def _strip_json_fences(raw_text: str) -> str:
     return text.strip()
 
 
-def _parse_json_object(raw_text: str) -> tuple[dict, str]:
+_STUTTER_TAIL_WINDOW = 200
+_STUTTER_MAX_SUFFIX_LENGTH = 80
+_STUTTER_IGNORED_CHARS = " \t\r\n{}\"',."
+
+
+def _normalize_for_stutter_check(text: str) -> str:
+    return "".join(ch for ch in text if ch not in _STUTTER_IGNORED_CHARS)
+
+
+def _looks_like_stutter(accepted_text: str, suffix: str) -> bool:
+    """Détecte le bégaiement de fin de génération observé chez Gemini en mode
+    JSON natif : après avoir correctement fermé l'objet JSON demandé, le
+    modèle répète parfois quelques fragments de la toute fin du texte déjà
+    produit (ex. la fin de la valeur de "analysis" suivie de "}") au lieu de
+    s'arrêter, cassant la syntaxe juste avant/à la fermeture (voir
+    conversation du 2026-07-20, reproduit par appel API réel : finish_reason
+    STOP, pas MAX_TOKENS - ce n'est pas une troncature).
+
+    N'accepte comme bégaiement que ce qui est à la fois COURT et entièrement
+    composé de fragments déjà présents dans la fin du texte accepté : un vrai
+    contenu supplémentaire (second objet JSON légitime, texte nouveau) ne
+    remplit pas ce critère et n'est donc jamais réparé silencieusement."""
+    if not suffix or len(suffix) > _STUTTER_MAX_SUFFIX_LENGTH:
+        return False
+
+    tail = accepted_text[-_STUTTER_TAIL_WINDOW:]
+    normalized_tail = _normalize_for_stutter_check(tail)
+    normalized_suffix = _normalize_for_stutter_check(suffix)
+
+    if not normalized_suffix:
+        # Le suffixe ne contenait que de la ponctuation/espaces/accolades :
+        # rien qui ressemble à du vrai contenu nouveau.
+        return True
+
+    # Chaque fragment du suffixe (séparé par les caractères ignorés, ex. les
+    # guillemets fermant/ouvrant une chaîne répétée) doit réapparaître tel
+    # quel dans la fin du texte déjà accepté.
+    fragments = [f for f in suffix.split() if _normalize_for_stutter_check(f)]
+    return all(_normalize_for_stutter_check(fragment) in normalized_tail for fragment in fragments)
+
+
+_STUTTER_REPAIR_MAX_LINES_DROPPED = 8
+
+
+def _try_repair_stuttered_json(text: str) -> tuple[dict, str] | None:
+    """Tente de récupérer un objet JSON dont la clé de fermeture attendue a
+    été remplacée par un bégaiement de fin de génération (voir
+    _looks_like_stutter) : Gemini termine correctement la dernière valeur
+    (ex. la chaîne de "analysis"), puis répète des fragments de cette même
+    fin AVANT de placer (ou à la place de) l'accolade de fermeture, ce qui
+    casse la syntaxe à un point où il n'existe déjà plus d'accolade fermante
+    valide dans le texte reçu (une simple recherche de la dernière "}" qui
+    parse ne suffit donc pas).
+
+    Recoupe le texte ligne par ligne en partant de la fin, referme l'objet
+    racine avec une accolade ajoutée, et ne garde la première coupe qui donne
+    un JSON valide QUE si les quelques lignes retirées sont reconnues comme
+    un bégaiement du texte restant ; sinon ne renvoie rien, pour ne jamais
+    masquer un cas différent (ex. vraie troncature en plein milieu d'une
+    valeur, qu'aucune fermeture ajoutée ne peut légitimement réparer)."""
+    lines = text.split("\n")
+    max_cut = len(lines)
+    min_cut = max(0, len(lines) - _STUTTER_REPAIR_MAX_LINES_DROPPED)
+    for cut in range(max_cut, min_cut, -1):
+        candidate = "\n".join(lines[:cut])
+        try:
+            obj = json.loads(candidate + "}")
+        except json.JSONDecodeError:
+            continue
+        suffix = "\n".join(lines[cut:]).strip()
+        if _looks_like_stutter(candidate, suffix):
+            return obj, suffix
+        return None
+    return None
+
+
+def _log_unparsable_response(raw_text: str, context_label: str, error: json.JSONDecodeError) -> None:
+    """Sauvegarde la réponse Gemini brute qui a fait échouer tout parsing (y
+    compris la tentative de réparation du bégaiement), pour diagnostic après
+    coup : sans ça, la réponse exacte qui a fait échouer une génération était
+    perdue dès l'affichage de l'erreur, ne laissant que le message d'erreur
+    générique pour comprendre ce qui s'est passé. Best-effort : une erreur
+    d'écriture ici (disque plein, permissions...) ne doit jamais empêcher
+    l'erreur GeminiError normale de remonter à l'utilisateur."""
+    try:
+        logs_dir = config.get_debug_logs_dir()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        log_path = logs_dir / f"gemini_unparsable_{context_label}_{timestamp}.txt"
+        header = (
+            f"context: {context_label}\n"
+            f"timestamp: {datetime.now().isoformat()}\n"
+            f"json_error: {error}\n"
+            f"{'-' * 40}\n"
+        )
+        log_path.write_text(header + raw_text, encoding="utf-8")
+        # Trace aussi l'événement dans la chronologie du journal d'appels
+        # API : la requête elle-même a réussi (ligne OK déjà écrite), mais sa
+        # réponse est inexploitable et la génération va échouer - sans cette
+        # ligne, le journal montrerait un OK suivi d'aucune FIN, sans
+        # explication visible dans la chronologie.
+        _log_api_call(f"reponse_illisible contexte={context_label} fichier={log_path.name}")
+    except OSError:
+        pass
+
+
+def _parse_json_object(raw_text: str, context_label: str = "unknown") -> tuple[dict, str]:
     """Parse le premier objet JSON de la réponse. Même en mode JSON natif de
     l'API, Gemini produit parfois du contenu superflu après un premier objet
     par ailleurs valide (ex : un second objet accolé) ; json.loads() rejette
@@ -587,11 +838,25 @@ def _parse_json_object(raw_text: str) -> tuple[dict, str]:
     exploitable. Le texte en trop est retourné (au lieu d'être jeté) : il
     peut s'agir de contenu légitime que l'utilisateur voudra récupérer à la
     main, ce n'est pas à l'application de décider silencieusement qu'il ne
-    sert à rien."""
+    sert à rien.
+
+    Si le parsing direct échoue, tente une réparation ciblée du bégaiement de
+    fin de génération (_try_repair_stuttered_json) avant d'abandonner : ce
+    cas est distinct d'un contenu superflu propre (raw_decode le gère déjà)
+    car le bégaiement casse la syntaxe de l'objet JSON lui-même. Si même cette
+    réparation échoue, la réponse brute est journalisée (_log_unparsable_response)
+    avant de lever l'erreur, pour permettre un diagnostic sur un futur cas non
+    couvert par la réparation actuelle. context_label identifie l'appel Gemini
+    en cause (ex. "consolidation", "chapter_summary_batch", "full_report")
+    dans le nom du fichier de log."""
     text = _strip_json_fences(raw_text)
     try:
         obj, end_index = json.JSONDecoder().raw_decode(text)
     except json.JSONDecodeError as exc:
+        repaired = _try_repair_stuttered_json(text)
+        if repaired is not None:
+            return repaired
+        _log_unparsable_response(raw_text, context_label, exc)
         raise GeminiError(tr("gemini_errors.unreadable_response", error=exc)) from exc
     leftover = text[end_index:].strip()
     return obj, leftover
@@ -618,11 +883,14 @@ def _parse_characters_list(data: list) -> list[Character]:
     return characters
 
 
-def _parse_full_report_json(raw_text: str) -> tuple[str, str, list[Character], str, str]:
+def _parse_full_report_json(raw_text: str, context_label: str = "full_report") -> tuple[str, str, list[Character], str, str]:
     """Parse la réponse combinée résumé + personnages + analyse. Le 4e élément
     retourné est le texte ignoré après le premier objet JSON (vide la plupart
-    du temps)."""
-    data, leftover = _parse_json_object(raw_text)
+    du temps). context_label distingue, dans le log de diagnostic en cas
+    d'échec, l'appel "rapport complet" (livre tenant en une requête) de
+    l'appel "consolidation" (dernière requête d'un livre découpé en lots) :
+    même fonction de parsing, deux contextes d'appel différents."""
+    data, leftover = _parse_json_object(raw_text, context_label)
     if not isinstance(data, dict):
         # Le mode JSON natif de Gemini garantit une syntaxe JSON valide, mais
         # pas que la racine soit un objet conforme au schéma demandé (ex : une
@@ -648,7 +916,7 @@ def _parse_chapter_summaries_batch_json(raw_text: str, batch: list[Chapter]) -> 
     différer de l'original) : le nombre d'entrées attendu est connu à
     l'avance, contrairement au cas des personnages où Gemini choisit lui-même
     combien d'entrées produire."""
-    data, leftover = _parse_json_object(raw_text)
+    data, leftover = _parse_json_object(raw_text, "chapter_summary_batch")
     raw_summaries = data.get("chapter_summaries", [])
 
     summaries: list[tuple[str, str]] = []
@@ -683,33 +951,91 @@ def generate_book_report(
     resume_chapter_summaries/resume_batches_done permettent de reprendre une
     génération en lots interrompue par un échec partiel (voir
     PartialGenerationError) sans reformuler les lots déjà résumés avec
-    succès : ignorés si le livre tient en une seule requête."""
+    succès : ignorés si le livre tient en une seule requête.
 
+    Enveloppe de journalisation autour de _generate_book_report_impl : les
+    marqueurs DEBUT/FIN/ECHEC du journal d'appels API délimitent chaque
+    génération, avec l'état du compteur local avant/après, l'info de reprise
+    éventuelle (des lots déjà faits sont sautés, ce qui explique un nombre de
+    requêtes inférieur au nombre de lots annoncé) et les totaux d'appels
+    réseau de la génération (appels de génération et appels de comptage de
+    tokens comptés séparément, voir _api_call_totals). La ligne ECHEC est
+    écrite quelle que soit l'erreur (quota, réponse illisible, bug...) pour
+    que ces totaux ne soient jamais perdus - c'est précisément dans les
+    générations qui échouent qu'on en a le plus besoin."""
+    _reset_api_call_totals()
+    _log_api_call(
+        f"generation DEBUT livre={_one_line(content.book_title)} modele={MODEL_NAME} "
+        f"reprise_lots_deja_faits={resume_batches_done} "
+        f"requetes_jour_avant={quota_tracker.snapshot().requests_today}"
+    )
+    try:
+        result = _generate_book_report_impl(
+            content,
+            quota_tracker,
+            on_progress=on_progress,
+            on_quota_update=on_quota_update,
+            use_custom_prompts=use_custom_prompts,
+            resume_chapter_summaries=resume_chapter_summaries,
+            resume_batches_done=resume_batches_done,
+        )
+    except Exception:
+        _log_api_call(
+            f"generation ECHEC livre={_one_line(content.book_title)} "
+            f"{_api_call_totals_summary()} "
+            f"requetes_jour={quota_tracker.snapshot().requests_today}"
+        )
+        raise
+    _log_api_call(
+        f"generation FIN livre={_one_line(content.book_title)} "
+        f"{_api_call_totals_summary()} "
+        f"requetes_jour={quota_tracker.snapshot().requests_today}"
+    )
+    return result
+
+
+def _generate_book_report_impl(
+    content: BookContent,
+    quota_tracker: QuotaTracker,
+    on_progress: ProgressCallback | None = None,
+    on_quota_update: QuotaCallback | None = None,
+    use_custom_prompts: bool = True,
+    resume_chapter_summaries: list[tuple[str, str]] | None = None,
+    resume_batches_done: int = 0,
+) -> BookReport:
     def report(done: int, total: int, message: str) -> None:
         if on_progress:
             on_progress(done, total, message)
 
     json_model = _get_json_model()
 
-    def call(prompt: str, model: genai.GenerativeModel = json_model) -> str:
+    def call(
+        prompt: str,
+        context_label: str,
+        model: genai.GenerativeModel = json_model,
+        estimated_input_tokens: int = 0,
+    ) -> str:
         return _call_gemini(
             model,
             prompt,
             quota_tracker=quota_tracker,
             on_quota_update=on_quota_update,
+            estimated_input_tokens=estimated_input_tokens,
+            context_label=context_label,
         )
 
     report(0, 1, tr("gemini_progress.counting_tokens"))
-    token_count = count_tokens(content.full_text)
+    token_count = count_tokens(content.full_text, "texte_integral")
     leftovers: list[str] = []
 
     if token_count <= MAX_TOKENS_PER_REQUEST:
         # Cas le plus courant : le texte tient sous la limite de débit par minute
         # (TPM) du palier gratuit, donc les deux résumés, personnages et analyse
         # sont demandés en une seule requête pour limiter la consommation de quota.
+        _log_api_call(f"generation MODE une_seule_requete tokens_texte={token_count}")
         report(0, 1, tr("gemini_progress.single_request", token_count=token_count))
         summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
-            call(_full_report_prompt(content, use_custom_prompts))
+            call(_full_report_prompt(content, use_custom_prompts), "full_report", estimated_input_tokens=token_count)
         )
         if leftover:
             leftovers.append(leftover)
@@ -719,12 +1045,17 @@ def generate_book_report(
         # Livre trop volumineux pour tenir dans une seule requête : le livre est
         # réparti en lots de chapitres consécutifs (un lot regroupe autant de
         # chapitres que la fenêtre de contexte du modèle le permet, pour
-        # limiter le nombre de requêtes envoyées - le quota journalier du
+        # limiter le nombre de requêtes envoyées - le quota quotidien du
         # palier gratuit est très serré, 20 requêtes/jour par défaut). Chaque
         # lot est résumé séparément, puis UNE SEULE requête finale reçoit tous
         # les résumés de chapitre et produit le résumé court, le résumé
         # détaillé, les personnages et l'analyse littéraire.
         batches = _split_chapters_into_batches(content.chapters)
+        _log_api_call(
+            f"generation MODE decoupage_en_lots lots={len(batches)} "
+            f"chapitres={len(content.chapters)} tokens_texte={token_count} "
+            f"requetes_generation_attendues={len(batches) + 1}"
+        )
         total_steps = len(batches) + 1
         report(
             0,
@@ -739,11 +1070,16 @@ def generate_book_report(
 
         chapter_summaries: list[tuple[str, str]] = list(resume_chapter_summaries or [])
         start_index = min(resume_batches_done, len(batches))
-        for i, batch in enumerate(batches[start_index:], start=start_index + 1):
+        for i, (batch, batch_tokens) in enumerate(batches[start_index:], start=start_index + 1):
             report(i - 1, total_steps, tr("gemini_progress.summarizing_batch", current=i, total=len(batches)))
             try:
                 batch_summaries, leftover = _parse_chapter_summaries_batch_json(
-                    call(_chapter_summary_prompt(content.book_title, content.author, batch, use_custom_prompts)), batch
+                    call(
+                        _chapter_summary_prompt(content.book_title, content.author, batch, use_custom_prompts),
+                        f"chapter_summary_batch_{i}/{len(batches)}",
+                        estimated_input_tokens=batch_tokens,
+                    ),
+                    batch,
                 )
             except GeminiError as exc:
                 if chapter_summaries:
@@ -761,9 +1097,15 @@ def generate_book_report(
             report(i, total_steps, tr("gemini_progress.batch_summarized", current=i, total=len(batches)))
 
         report(len(batches), total_steps, tr("gemini_progress.merging_summaries"))
+        consolidation_prompt = _consolidation_prompt(content.book_title, content.author, chapter_summaries, use_custom_prompts)
         try:
             summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
-                call(_consolidation_prompt(content.book_title, content.author, chapter_summaries, use_custom_prompts))
+                call(
+                    consolidation_prompt,
+                    "consolidation",
+                    estimated_input_tokens=count_tokens(consolidation_prompt, "consolidation"),
+                ),
+                "consolidation",
             )
         except GeminiError as exc:
             raise PartialGenerationError(

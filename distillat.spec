@@ -1,11 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 """Configuration PyInstaller (mode one-dir) pour générer l'exécutable Distillat."""
 
+from PyInstaller.utils.hooks import collect_data_files
+
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('LICENSE', '.'), ('icons/open-book_4681875.png', 'icons'), ('locales', 'locales')],
+    datas=[('LICENSE', '.'), ('CHANGELOG.md', '.'), ('icons/open-book_4681875.png', 'icons'), ('locales', 'locales')]
+    + collect_data_files('tzdata'),
     hiddenimports=[
         'google.generativeai',
         'google.ai.generativelanguage',
@@ -15,6 +18,8 @@ a = Analysis(
         'pypdf',
         'pypdfium2',
         'keyring.backends.Windows',
+        'send2trash.win',
+        'tzdata',
     ],
     hookspath=[],
     hooksconfig={},

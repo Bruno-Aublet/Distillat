@@ -18,7 +18,7 @@ L'application s'appuie sur le palier gratuit de Gemini 3.5 Flash.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.2.0**
+**Version 1.2.1**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
@@ -81,8 +81,16 @@ ou en ligne : ne le trouverez pas, il n'a jamais existé.
      personnages principaux et l'analyse littéraire. Si un échec survient en
      cours de route (quota atteint, réponse Gemini illisible...), les lots
      déjà résumés avec succès sont conservés : redéposer le même fichier et
-     cliquer de nouveau sur **Résumer** propose de reprendre exactement là où
+     cliquer de nouveau sur **Résumer** reprend directement exactement là où
      le traitement s'était arrêté, sans reformuler ce qui a déjà été obtenu.
+     Un ou plusieurs livres peuvent rester ainsi en attente de reprise ; au
+     démarrage de l'application, si c'est le cas, une fenêtre les liste tous
+     et permet d'en charger un directement (bouton **Reprendre la
+     sélection**), sans avoir à le retrouver et le redéposer soi-même - il
+     suffit ensuite de cliquer sur **Résumer** pour reprendre sa génération.
+     Le bouton **Supprimer** de cette fenêtre efface l'état de reprise d'un
+     livre (pour repartir de zéro à la place) ; le fichier correspondant est
+     envoyé à la corbeille Windows plutôt que supprimé sans recours.
 4. Le résultat (toujours dans la langue actuellement choisie pour
    l'interface, quelle que soit la langue du livre - voir
    [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches))
@@ -164,20 +172,28 @@ temps**. Vérifiez les vôtres sur
 ajustez-les si besoin via le bouton **Limites de quota** de l'application ;
 elles sont alors enregistrées dans `%APPDATA%\Distillat\quota_limits.json`.
 
-Avec seulement 20 requêtes par jour, le quota journalier est le facteur le
-plus limitant : chaque livre consomme au minimum 2 requêtes (comptage des
-tokens + génération), davantage si le livre est volumineux et doit être
-découpé par chapitres - comptez large.
+Avec seulement 20 requêtes par jour, le quota quotidien est le facteur le
+plus limitant : chaque livre consomme au minimum 1 requête (génération),
+davantage si le livre est volumineux et doit être découpé par chapitres -
+comptez large. Ce quota quotidien se réinitialise à minuit heure du
+Pacifique (Californie), soit en général en matinée en France (le décalage
+exact varie légèrement selon les changements d'heure respectifs de la
+France et de la Californie).
 
 L'application affiche en temps réel une estimation de la consommation
 (tokens entrée/sortie, requêtes et tokens par minute, requêtes par jour), avec
 un avertissement dès 80 % d'une limite atteinte. En cas de quota effectivement
 dépassé, la génération échoue immédiatement avec un message clair (aucune
 nouvelle tentative automatique) ; il suffit de recliquer sur **Résumer** une
-fois le quota libéré. Ce suivi est **local à l'application** : il ne reflète
-pas l'usage réel si la même clé API est utilisée ailleurs en parallèle (un
-autre outil, un test manuel via AI Studio...), auquel cas les compteurs
-affichés ne seront plus fiables.
+fois le quota libéré. Ce compteur tient compte de chaque requête envoyée à
+Gemini, qu'elle réussisse ou échoue, pour rester fidèle au quota réellement
+consommé ; le temps qu'une requête reçoive sa réponse (jusqu'à plusieurs
+minutes pour un gros livre), un indicateur « (+1 en attente) » apparaît à
+côté du compteur de requêtes du jour pour signaler qu'elle est bien partie.
+Ce suivi est **local à l'application** : il ne reflète pas l'usage
+réel si la même clé API est utilisée ailleurs en parallèle (un autre outil,
+un test manuel via AI Studio...), auquel cas les compteurs affichés ne
+seront plus fiables.
 
 ## Installation (développement)
 
@@ -238,9 +254,17 @@ lors d'une mise à jour) :
   [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches) ;
   les prompts personnalisés par langue, si modifiés via le bouton **Prompts** ;
   et les derniers dossiers utilisés pour une fiche et pour un export PDF, voir
-  ci-dessous) et **`.generation_resume.json`** (lots de chapitres déjà résumés
-  pour une génération interrompue par un échec ; absent en l'absence d'échec,
-  supprimé dès qu'une génération se termine avec succès) : `%APPDATA%\Distillat\`.
+  ci-dessous), **`.generation_resume_<hash>.json`** (un fichier par livre,
+  lots de chapitres déjà résumés pour une génération interrompue par un
+  échec ; absent en l'absence d'échec, supprimé dès que la génération de ce
+  livre se termine avec succès) et **`debug_logs\`**
+  (fichiers de diagnostic : réponses Gemini brutes sauvegardées
+  automatiquement quand une réponse reste illisible même après tentative de
+  réparation automatique, et journal `api_requests.log` consignant chaque
+  appel envoyé à Gemini - horodatage, type d'appel, tokens, durée, résultat,
+  jamais le contenu du livre - pour pouvoir comparer la consommation réelle
+  avec le dashboard Google AI Studio) :
+  `%APPDATA%\Distillat\`.
 - **Fiches sauvegardées** (`.distillat.json`) et **exports PDF** :
   `Documents\Distillat\Fiches\` au tout premier usage, puis le dernier dossier
   utilisé pour ce type de fichier (fiche ou PDF, mémorisés séparément) est
@@ -256,14 +280,16 @@ lors d'une mise à jour) :
   résolution alourdisse inutilement le fichier ; une fiche existante
   contenant encore une couverture surdimensionnée (créée par une version
   antérieure) est allégée automatiquement dès son prochain chargement.
-- **`LICENSE`**, **icône de l'application** (`icons/open-book_4681875.png`) et
-  **fichiers de traduction** (`locales/fr.json`, `locales/en.json`) :
-  embarqués à la compilation (dans `_internal/`). Le `LICENSE` est accessible
-  depuis le footer de l'application (« Copyright ... - Licence GNU GPL v3 »).
+- **`LICENSE`**, **`CHANGELOG.md`**, **icône de l'application**
+  (`icons/open-book_4681875.png`) et **fichiers de traduction**
+  (`locales/fr.json`, `locales/en.json`) : embarqués à la compilation (dans
+  `_internal/`). Le `LICENSE` et le `CHANGELOG.md` sont accessibles depuis le
+  footer de l'application (« Copyright ... - Licence GNU GPL v3 » à gauche ;
+  liens « Code source », « Téléchargement » et « Changelog » à droite).
 
 En développement (`python main.py`), tous ces emplacements sont identiques au
 mode compilé, y compris les fichiers techniques (`.quota_state.json`,
-`quota_limits.json`, `settings.json`, `.generation_resume.json`), désormais
+`quota_limits.json`, `settings.json`, `.generation_resume_<hash>.json`), désormais
 toujours dans `%APPDATA%\Distillat\` quel que soit le mode de lancement (pour
 que le suivi de quota reflète la même consommation réelle, peu importe la
 façon de lancer l'application). Le
@@ -304,7 +330,7 @@ The application relies on Gemini 3.5 Flash's free tier.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
 `.zip` file to download is at the bottom of the release page).
 
-**Version 1.2.0**
+**Version 1.2.1**
 
 Windows application with a PyQt5 interface to generate a complete reading
 report (summaries, characters, analysis) from an EPUB or PDF book, via the
@@ -368,7 +394,10 @@ online: you won't find it, it never existed.
      unreadable Gemini response...), batches already summarized
      successfully are kept: dropping the same file again and clicking
      **Summarize** again offers to resume exactly where processing had
-     stopped, without redoing what was already obtained.
+     stopped, without redoing what was already obtained. One or more books
+     can remain waiting to be resumed this way; on startup, if that is the
+     case, a window lists all of them and lets you resume one directly,
+     without having to find and drop the file again yourself.
 4. The result (always in the language currently chosen for the interface,
    regardless of the book's language - see
    [Interface and report language](#interface-and-report-language)) is
@@ -447,17 +476,24 @@ adjust them if needed via the **Quota limits** button in the application;
 they are then stored in `%APPDATA%\Distillat\quota_limits.json`.
 
 With only 20 requests per day, the daily quota is the most limiting factor:
-each book consumes at least 2 requests (token counting + generation), more
-if the book is large and needs to be split by chapters - plan generously.
+each book consumes at least 1 request (generation), more if the book is
+large and needs to be split by chapters - plan generously. This daily quota
+resets at midnight Pacific Time (California), not at midnight in your own
+local time zone.
 
 The application shows a real-time estimate of consumption (input/output
 tokens, requests and tokens per minute, requests per day), with a warning as
 soon as 80% of a limit is reached. If a quota is actually exceeded,
 generation fails immediately with a clear message (no automatic retry);
-simply click **Summarize** again once the quota is freed. This tracking is
-**local to the application**: it does not reflect actual usage if the same
-API key is used elsewhere in parallel (another tool, a manual test via AI
-Studio...), in which case the displayed counters will no longer be accurate.
+simply click **Summarize** again once the quota is freed. This counter
+accounts for every request sent to Gemini, whether it succeeds or fails, to
+stay true to the quota actually consumed; while a request is awaiting its
+response (up to several minutes for a large book), a "(+1 pending)"
+indicator appears next to the daily request counter to show it was indeed
+sent. This tracking is **local to the application**: it does not reflect
+actual usage if the same API key is used elsewhere in parallel (another
+tool, a manual test via AI Studio...), in which case the displayed counters
+will no longer be accurate.
 
 ## Installation (development)
 
@@ -516,10 +552,17 @@ update):
   **`settings.json`** (groups together the chosen interface language, see
   [Interface and report language](#interface-and-report-language); custom
   prompts per language, if changed via the **Prompts** button; and the last
-  folders used for a report and for a PDF export, see below) and
-  **`.generation_resume.json`** (chapter batches already summarized for a
-  generation interrupted by a failure; absent if there was no failure,
-  removed as soon as a generation finishes successfully):
+  folders used for a report and for a PDF export, see below),
+  **`.generation_resume_<hash>.json`** (one file per book, chapter batches
+  already summarized for a generation interrupted by a failure; absent if
+  there was no failure, removed as soon as that book's generation finishes
+  successfully) and
+  **`debug_logs\`** (diagnostic files: raw Gemini responses saved
+  automatically when a response stays unreadable even after an automatic
+  repair attempt, and an `api_requests.log` journal recording every call
+  sent to Gemini - timestamp, call type, tokens, duration, outcome, never
+  the book content itself - so actual consumption can be compared with the
+  Google AI Studio dashboard):
   `%APPDATA%\Distillat\`.
 - **Saved reports** (`.distillat.json`) and **PDF exports**:
   `Documents\Distillat\Fiches\` on first use, then the last folder used for
@@ -535,14 +578,16 @@ update):
   needlessly bloating the file; an existing report still containing an
   oversized cover (created by an earlier version) is lightened automatically
   the next time it is loaded.
-- **`LICENSE`**, **application icon** (`icons/open-book_4681875.png`), and
-  **translation files** (`locales/fr.json`, `locales/en.json`): bundled at
-  compile time (in `_internal/`). The `LICENSE` is accessible from the
-  application's footer ("Copyright ... - GNU GPL v3 license").
+- **`LICENSE`**, **`CHANGELOG.md`**, **application icon**
+  (`icons/open-book_4681875.png`), and **translation files**
+  (`locales/fr.json`, `locales/en.json`): bundled at compile time (in
+  `_internal/`). The `LICENSE` and `CHANGELOG.md` are accessible from the
+  application's footer ("Copyright ... - GNU GPL v3 license" on the left;
+  "Source code", "Download", and "Changelog" links on the right).
 
 In development (`python main.py`), all these locations are identical to the
 compiled mode, including the technical files (`.quota_state.json`,
-`quota_limits.json`, `settings.json`, `.generation_resume.json`), now always
+`quota_limits.json`, `settings.json`, `.generation_resume_<hash>.json`), now always
 in `%APPDATA%\Distillat\` regardless of the launch mode (so that quota
 tracking reflects the same actual consumption, no matter how the application
 is launched). The `Fiches/` folder at the project root only hosts the

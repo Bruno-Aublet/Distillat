@@ -22,7 +22,7 @@
     "analysis_heading": "Analyse littéraire"
   },
   "gemini_errors": {
-    "daily_quota_exceeded": "Le quota journalier de requêtes Gemini est épuisé pour aujourd'hui. Il se réinitialise à minuit. (erreur 429 : quota journalier dépassé)",
+    "daily_quota_exceeded": "Le quota quotidien de requêtes Gemini est épuisé pour aujourd'hui. Il se réinitialise à minuit, heure du Pacifique (Californie), soit en général en matinée en France. (erreur 429 : quota quotidien dépassé)",
     "rate_quota_exceeded": "Le quota Gemini (requêtes ou tokens par minute) est temporairement dépassé. Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 429 : quota par minute dépassé)",
     "service_unavailable": "Le service Gemini est temporairement indisponible. Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 503)",
     "internal_server_error": "Le service Gemini a rencontré une erreur interne. Réessayez dans quelques instants en cliquant à nouveau sur Résumer. (erreur 500)",
@@ -56,11 +56,18 @@
   },
   "license_dialog": {
     "window_title": "Licence",
-    "file_not_found": "Fichier de licence introuvable ({license_path}).\n\nCe logiciel est distribué sous licence GNU GPL v3 : https://www.gnu.org/licenses/gpl-3.0.txt"
+    "file_not_found": "Fichier de licence introuvable ({license_path}).\n\nCe logiciel est distribué sous licence GNU GPL v3 : https://www.gnu.org/licenses/gpl-3.0.txt",
+    "ok_button": "OK"
+  },
+  "changelog_dialog": {
+    "window_title": "Changelog",
+    "file_not_found": "Fichier changelog introuvable ({changelog_path}).",
+    "close_button": "Fermer"
   },
   "extra_text_dialog": {
     "window_title": "Contenu supplémentaire ignoré",
-    "explanation": "Gemini a produit ce texte en plus du contenu utilisé pour la fiche. Il peut s'agir d'une répétition sans intérêt ou de contenu légitime : vérifiez-le et copiez-collez ce qui vous semble utile."
+    "explanation": "Gemini a produit ce texte en plus du contenu utilisé pour la fiche. Il peut s'agir d'une répétition sans intérêt ou de contenu légitime : vérifiez-le et copiez-collez ce qui vous semble utile.",
+    "close_button": "Fermer"
   },
   "eye_icon": {
     "tooltip": "Afficher/masquer la clé"
@@ -99,7 +106,7 @@
       },
       "chapter_summary": {
         "title": "1. Résumé d'un lot de chapitres",
-        "explanation": "Cas d'un livre trop volumineux pour tenir dans une seule requête : premier prompt du découpage. Le livre est réparti en lots de plusieurs chapitres consécutifs (le plus possible à la fois selon la taille du livre), pour limiter le nombre de requêtes envoyées à l'API (le quota gratuit journalier est très limité). Ce prompt reçoit un lot et doit résumer chaque chapitre du lot séparément."
+        "explanation": "Cas d'un livre trop volumineux pour tenir dans une seule requête : premier prompt du découpage. Le livre est réparti en lots de plusieurs chapitres consécutifs (le plus possible à la fois selon la taille du livre), pour limiter le nombre de requêtes envoyées à l'API (le quota gratuit quotidien est très limité). Ce prompt reçoit un lot et doit résumer chaque chapitre du lot séparément."
       },
       "consolidation": {
         "title": "2. Fusion résumé + personnages + analyse",
@@ -112,6 +119,15 @@
     "busy": "Résumé en cours...<br>Glissez-déposez un nouveau fichier une fois terminé",
     "file_dialog_title": "Choisir un fichier EPUB, PDF ou une fiche",
     "file_dialog_filter": "Tous les formats pris en charge (*.epub *.pdf *.distillat.json);;Fichiers EPUB/PDF (*.epub *.pdf);;Fiches Distillat (*.distillat.json)"
+  },
+  "pending_resumes_dialog": {
+    "window_title": "Livre(s) en attente de reprise",
+    "intro": "Une ou plusieurs générations précédentes se sont arrêtées avant la fin. Sélectionnez un livre ci-dessous pour reprendre sa génération là où elle s'était arrêtée, ou fermez cette fenêtre pour décider plus tard (elle réapparaîtra au prochain démarrage tant qu'un livre reste en attente).",
+    "item_label": "{filename} - {batches_done}/{batches_total} lot(s) de chapitres résumé(s)",
+    "item_missing_suffix": "(fichier introuvable)",
+    "delete_button": "Supprimer",
+    "close_button": "Fermer",
+    "resume_button": "Reprendre la sélection"
   },
   "main_window": {
     "window_title": "Distillat v{version} - Résumé de livres avec Gemini",
@@ -132,6 +148,9 @@
     "close_report_button": "Fermer la fiche",
     "export_pdf_button": "Exporter en .pdf",
     "footer_button": "Copyright 2026 Bruno Aublet - Licence GNU GPL v3",
+    "source_code_link": "Code source",
+    "download_link": "Téléchargement",
+    "changelog_link": "Changelog",
     "no_cover": "Pas de couverture",
     "summary_placeholder": "Le résumé court en français apparaîtra ici après traitement.",
     "detailed_summary_placeholder": "Le résumé détaillé en français apparaîtra ici après traitement.",
@@ -148,7 +167,8 @@
     "elapsed_suffix": "{message} (écoulé : {elapsed})",
     "duration_minutes": "{minutes} min {seconds:02d} s",
     "duration_seconds": "{seconds} s",
-    "quota_display": "Tokens - entrée : {input_tokens} · sortie : {output_tokens} · total : {total_tokens}\nRequêtes/minute : {rpm}/{rpm_limit} · Tokens/minute : {tpm}/{tpm_limit} · Requêtes/jour : {rpd}/{rpd_limit}",
+    "quota_display": "Tokens - entrée : {input_tokens} · sortie : {output_tokens} · total : {total_tokens}\nRequêtes/minute : {rpm}/{rpm_limit} · Tokens/minute : {tpm}/{tpm_limit} · Requêtes/jour : {rpd}/{rpd_limit}{in_flight_suffix}",
+    "quota_display_in_flight_suffix": " (+{count} en attente)",
     "quota_threshold_prefix": "⚠️ Quota bientôt atteint : ",
     "quota_threshold_rpd": "{used}/{limit} requêtes utilisées aujourd'hui",
     "quota_threshold_rpm": "{used}/{limit} requêtes sur la minute en cours",
@@ -157,8 +177,8 @@
     "mode_single": "Résumé produit en une seule requête.",
     "finished_status": "Terminé en {duration}. {mode}",
     "failed_status": "Échec après {duration}.",
-    "quota_exceeded_warning": "🚫 Quota Gemini dépassé, l'appli ne peut plus faire de requêtes pour l'instant. Réessayez plus tard (le quota par minute se réinitialise en 60 s, le quota journalier à minuit).",
-    "resume_wait_hint_daily": "C'est le quota JOURNALIER (nombre de requêtes/jour) qui est épuisé : il ne se réinitialise qu'à minuit, il faudra donc attendre demain avant de pouvoir reprendre. Une fois ce délai passé, ",
+    "quota_exceeded_warning": "🚫 Quota Gemini dépassé, l'appli ne peut plus faire de requêtes pour l'instant. Réessayez plus tard (le quota par minute se réinitialise en 60 s, le quota quotidien à minuit heure du Pacifique, soit en général en matinée en France).",
+    "resume_wait_hint_daily": "C'est le quota JOURNALIER (nombre de requêtes/jour) qui est épuisé : il ne se réinitialise qu'à minuit heure du Pacifique (Californie), soit en général en matinée en France, il faudra donc attendre avant de pouvoir reprendre. Une fois ce délai passé, ",
     "resume_wait_hint_minute": "C'est le quota PAR MINUTE (requêtes ou tokens/minute) qui est temporairement dépassé : il se libère de lui-même en général en moins de 2 minutes. Une fois ce délai passé, ",
     "resume_wait_hint_other": "Ce n'est pas un problème de quota : rien à attendre, il s'agit probablement d'un aléa ponctuel de génération. Vous pouvez réessayer tout de suite, ",
     "resume_hint_suffix": "\n\nRien n'est perdu : les {batches_done}/{batches_total} lot(s) de chapitres déjà résumés avec succès ont été sauvegardés. {wait_hint}glissez-déposez à nouveau ce même fichier EPUB/PDF et cliquez sur \"Résumer\" : Distillat reconnaîtra automatiquement où le traitement s'était arrêté et proposera de reprendre exactement à partir de là, sans refaire le travail déjà fait.",
@@ -193,12 +213,6 @@
       "text": "Une génération est en cours. Voulez-vous vraiment quitter ?\nLa fiche en cours de génération sera perdue (le quota Gemini déjà consommé ne sera pas restitué).",
       "quit_button": "Oui : quitter",
       "stay_button": "Non : laisser la génération se terminer"
-    },
-    "resume_dialog": {
-      "window_title": "Reprendre la génération interrompue ?",
-      "text": "Une génération précédente pour ce livre s'était arrêtée après {batches_done}/{batches_total} lot(s) de chapitres résumé(s) avec succès.\n\nReprendre à partir de là (recommandé), ou repartir de zéro ?",
-      "resume_button": "Reprendre",
-      "restart_button": "Repartir de zéro"
     }
   }
 }

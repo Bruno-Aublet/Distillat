@@ -8,5 +8,7 @@ pypdfium2==5.12.1
 pillow==12.3.0
 reportlab==4.5.1
 keyring==25.7.0
+send2trash==2.1.0
 packaging==26.2
+tzdata==2026.3
 pyinstaller==6.11.1

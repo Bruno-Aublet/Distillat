@@ -11,6 +11,7 @@ from pathlib import Path
 
 import keyring
 from keyring.errors import KeyringError
+from send2trash import send2trash
 
 APP_FOLDER_NAME = "Distillat"
 KEYRING_SERVICE_NAME = "Distillat"
@@ -66,6 +67,18 @@ def get_reports_dir() -> Path:
     reports_dir = Path.home() / "Documents" / APP_FOLDER_NAME / "Fiches"
     reports_dir.mkdir(parents=True, exist_ok=True)
     return reports_dir
+
+
+def get_debug_logs_dir() -> Path:
+    """Sous-dossier de `get_settings_dir()` où sont journalisées les réponses
+    Gemini brutes en cas d'échec de parsing JSON (voir
+    `gemini_client._log_unparsable_response()`), pour permettre un diagnostic
+    après coup sans avoir à reproduire l'appel API. Même emplacement unique
+    quel que soit le mode de lancement, comme le reste des données techniques
+    (règle 6 du projet)."""
+    logs_dir = get_settings_dir() / "debug_logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    return logs_dir
 
 
 def load_settings() -> dict:
@@ -204,7 +217,7 @@ def _merge_legacy_settings_files() -> None:
             settings["last_dirs"] = legacy_last_dirs
             changed = True
         try:
-            last_dirs_path.unlink()
+            send2trash(str(last_dirs_path))
         except OSError:
             pass
 
@@ -217,7 +230,7 @@ def _merge_legacy_settings_files() -> None:
             settings["prompts"] = legacy_prompts
             changed = True
         try:
-            prompts_path.unlink()
+            send2trash(str(prompts_path))
         except OSError:
             pass
 

@@ -15,8 +15,23 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Le quota RPD (requêtes/jour) du palier gratuit Gemini est remis à zéro par
+# Google à minuit heure du Pacifique (00:00 PT), jamais à minuit heure locale
+# de l'utilisateur : un reset basé sur date.today() (heure système Windows)
+# désynchronisait le compteur local de plusieurs heures par rapport au vrai
+# reset côté Google (jusqu'à 9h-10h du matin en France selon PST/PDT), bug
+# constaté le 2026-07-21. ZoneInfo gère automatiquement la bascule PST/PDT.
+_QUOTA_RESET_TZ = ZoneInfo("America/Los_Angeles")
+
+
+def _pacific_today() -> date:
+    """Date du jour telle que comptée par Google pour le reset du quota RPD
+    (minuit heure du Pacifique), indépendante du fuseau horaire local."""
+    return datetime.now(_QUOTA_RESET_TZ).date()
 
 # Valeurs par défaut si l'utilisateur n'a pas encore personnalisé ses limites
 # (voir load_quota_limits/save_quota_limits) - Google peut les faire évoluer
@@ -68,6 +83,7 @@ class QuotaSnapshot:
     rpm_limit: int = DEFAULT_RPM_LIMIT
     tpm_limit: int = DEFAULT_TPM_LIMIT
     rpd_limit: int = DEFAULT_RPD_LIMIT
+    requests_in_flight: int = 0
 
 
 @dataclass
@@ -89,10 +105,11 @@ class QuotaTracker:
     output_tokens_total: int = 0
     _recent_calls: list[_Call] = field(default_factory=list)
     _requests_today: int = 0
-    _today: date = field(default_factory=date.today)
+    _today: date = field(default_factory=_pacific_today)
     _rpm_limit: int = DEFAULT_RPM_LIMIT
     _tpm_limit: int = DEFAULT_TPM_LIMIT
     _rpd_limit: int = DEFAULT_RPD_LIMIT
+    _requests_in_flight: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
@@ -128,7 +145,7 @@ class QuotaTracker:
             pass
 
     def _roll_day_if_needed(self) -> None:
-        today = date.today()
+        today = _pacific_today()
         if today != self._today:
             self._today = today
             self._requests_today = 0
@@ -137,7 +154,36 @@ class QuotaTracker:
         cutoff = now - _WINDOW_SECONDS
         self._recent_calls = [c for c in self._recent_calls if c.timestamp >= cutoff]
 
+    def begin_request(self) -> QuotaSnapshot:
+        """À appeler juste avant d'envoyer une requête à Gemini
+        (model.generate_content), pour que l'affichage puisse signaler
+        qu'une requête est en attente de réponse avant même que le compteur
+        RPD/RPM (record_call, appelé lui seulement au retour de l'appel,
+        succès ou échec) n'ait bougé - sans quoi ce dernier restait figé
+        pendant toute la durée de la génération (parfois plusieurs minutes
+        pour un gros livre), donnant l'impression à tort qu'aucune requête
+        n'avait encore été envoyée. requests_in_flight ne doit jamais
+        influencer requests_today/_recent_calls : ce n'est qu'un indicateur
+        visuel, pas une estimation anticipée du quota consommé."""
+        with self._lock:
+            self._requests_in_flight += 1
+            return self._snapshot_locked()
+
+    def end_request(self) -> QuotaSnapshot:
+        """À appeler juste après le retour de l'appel réseau (succès ou
+        échec), avant ou après record_call() indifféremment : symétrique de
+        begin_request()."""
+        with self._lock:
+            self._requests_in_flight = max(0, self._requests_in_flight - 1)
+            return self._snapshot_locked()
+
     def record_call(self, input_tokens: int, output_tokens: int) -> QuotaSnapshot:
+        """À appeler dès que l'appel réseau à Gemini est revenu, que la
+        réponse soit un succès ou une erreur (voir app/gemini_client.py,
+        _call_gemini) : Google comptabilise la requête côté serveur (RPM et
+        RPD) dans les deux cas, donc le suivi local doit faire de même pour
+        rester synchronisé avec le dashboard Google (divergence constatée le
+        2026-07-21 quand seuls les appels réussis étaient comptés ici)."""
         with self._lock:
             self._roll_day_if_needed()
             now = time.monotonic()
@@ -171,4 +217,5 @@ class QuotaTracker:
             rpm_limit=self._rpm_limit,
             tpm_limit=self._tpm_limit,
             rpd_limit=self._rpd_limit,
+            requests_in_flight=self._requests_in_flight,
         )

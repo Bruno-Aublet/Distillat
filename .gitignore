@@ -11,6 +11,8 @@ dist/
 .venv/
 venv/
 .vscode/
-.claude/
+.claude/*
+!.claude/skills/
 RELEASE.txt
 à faire.txt
+Tools/
