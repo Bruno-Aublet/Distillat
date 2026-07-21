@@ -1,4 +1,5 @@
 """Fenêtre principale de l'application Distillat."""
+import hashlib
 import os
 import platform
 import re
@@ -110,6 +111,46 @@ class ChangelogDialog(QDialog):
         close_row = QHBoxLayout()
         close_row.addStretch()
         close_button = QPushButton(tr("changelog_dialog.close_button"))
+        close_button.clicked.connect(self.close)
+        close_row.addWidget(close_button)
+        layout.addLayout(close_row)
+
+
+class QuotaHelpDialog(QDialog):
+    """Explique en langage clair, sans jargon technique, le fonctionnement
+    des quotas et des requêtes Gemini (public visé : non technique)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowTitle(tr("quota_help_dialog.window_title"))
+        self.resize(480, 420)
+
+        layout = QVBoxLayout(self)
+
+        intro = QLabel(tr("quota_help_dialog.intro"))
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        for title_key, body_key in (
+            ("quota_help_dialog.requests_title", "quota_help_dialog.requests_body"),
+            ("quota_help_dialog.failures_title", "quota_help_dialog.failures_body"),
+            ("quota_help_dialog.resume_title", "quota_help_dialog.resume_body"),
+        ):
+            title = QLabel(tr(title_key))
+            title.setStyleSheet("font-weight: bold;")
+            title.setWordWrap(True)
+            layout.addWidget(title)
+
+            body = QLabel(tr(body_key))
+            body.setWordWrap(True)
+            layout.addWidget(body)
+
+        layout.addStretch()
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close_button = QPushButton(tr("quota_help_dialog.close_button"))
         close_button.clicked.connect(self.close)
         close_row.addWidget(close_button)
         layout.addLayout(close_row)
@@ -819,6 +860,7 @@ class MainWindow(QMainWindow):
             self.file_label.setText(tr("main_window.no_file_selected"))
         self.remove_file_button.setText(tr("main_window.remove_file_button"))
         self.summarize_button.setText(tr("main_window.summarize_button"))
+        self.quota_help_button.setToolTip(tr("quota_help_dialog.tooltip"))
         self.extra_text_label.setText(tr("main_window.extra_text_label"))
         self.quota_disclaimer_label.setText(tr("main_window.quota_disclaimer"))
         self.load_report_button.setText(tr("main_window.load_report_button"))
@@ -936,10 +978,20 @@ class MainWindow(QMainWindow):
         self._set_summarize_button_enabled(False)
         layout.addLayout(action_row)
 
-        self.status_label = QLabel("")
+        status_row = QHBoxLayout()
+
+        self.quota_help_button = QPushButton("?")
+        self.quota_help_button.setFixedSize(22, 22)
+        self.quota_help_button.setToolTip(tr("quota_help_dialog.tooltip"))
+        self.quota_help_button.clicked.connect(self._on_show_quota_help)
+        status_row.addWidget(self.quota_help_button)
+
+        self.status_label = QLabel(tr("main_window.idle_status"))
         self.status_label.setStyleSheet("color: #555;")
         self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
+        status_row.addWidget(self.status_label, stretch=1)
+
+        layout.addLayout(status_row)
 
         # Discret et masqué par défaut : n'apparaît que si Gemini a produit du
         # texte en trop après le premier objet JSON exploité (cas rare d'une
@@ -1270,6 +1322,9 @@ class MainWindow(QMainWindow):
     def _on_show_changelog(self) -> None:
         ChangelogDialog(self).exec_()
 
+    def _on_show_quota_help(self) -> None:
+        QuotaHelpDialog(self).exec_()
+
     def _on_open_repo_page(self) -> None:
         webbrowser.open(repo_page_url())
 
@@ -1310,7 +1365,7 @@ class MainWindow(QMainWindow):
         self.save_button.setEnabled(False)
         self.save_report_button.setEnabled(False)
         self.close_report_button.setEnabled(False)
-        self.status_label.setText("")
+        self.status_label.setText(tr("main_window.idle_status"))
         self.status_label.setStyleSheet("color: #555;")
         self.extra_text_label.hide()
         self.last_result = None
@@ -1328,7 +1383,7 @@ class MainWindow(QMainWindow):
         self.save_button.setEnabled(False)
         self.save_report_button.setEnabled(False)
         self.close_report_button.setEnabled(False)
-        self.status_label.setText("")
+        self.status_label.setText(tr("main_window.idle_status"))
         self.status_label.setStyleSheet("color: #555;")
         self.extra_text_label.hide()
         self.last_result = None
@@ -1345,7 +1400,7 @@ class MainWindow(QMainWindow):
         self.save_button.setEnabled(False)
         self.save_report_button.setEnabled(False)
         self.close_report_button.setEnabled(False)
-        self.status_label.setText("")
+        self.status_label.setText(tr("main_window.idle_status"))
         self.status_label.setStyleSheet("color: #555;")
         self.extra_text_label.hide()
         self._clear_result_tabs()
@@ -1560,6 +1615,13 @@ class MainWindow(QMainWindow):
         self._elapsed_timer.start()
 
         self.quota_warning_label.hide()
+        # Hash de la clé API (jamais la clé en clair) en tête de chaque
+        # génération : permet de distinguer dans le journal d'appels API
+        # quelles requêtes proviennent de quel compte Google/clé, en testant
+        # avec plusieurs comptes (un même hash = même clé, sans jamais
+        # exposer la clé elle-même si le fichier de log est partagé).
+        api_key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:8]
+        log_api_event(f"generation DEMARRAGE cle_api_hash={api_key_hash}")
         self.worker = SummarizeWorker(self.selected_book_path, api_key, self.quota_tracker, resume_state)
         self.worker.progress.connect(self._on_progress)
         self.worker.quota_updated.connect(self._update_quota_display)

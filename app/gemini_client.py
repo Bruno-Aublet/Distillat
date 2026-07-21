@@ -784,7 +784,10 @@ def _try_repair_stuttered_json(text: str) -> tuple[dict, str] | None:
     un JSON valide QUE si les quelques lignes retirées sont reconnues comme
     un bégaiement du texte restant ; sinon ne renvoie rien, pour ne jamais
     masquer un cas différent (ex. vraie troncature en plein milieu d'une
-    valeur, qu'aucune fermeture ajoutée ne peut légitimement réparer)."""
+    valeur, qu'aucune fermeture ajoutée ne peut légitimement réparer).
+
+    Si aucune coupe par la fin ne donne de JSON valide, tente la variante du
+    bégaiement INTERNE (_try_repair_internal_stutter) avant d'abandonner."""
     lines = text.split("\n")
     max_cut = len(lines)
     min_cut = max(0, len(lines) - _STUTTER_REPAIR_MAX_LINES_DROPPED)
@@ -798,6 +801,43 @@ def _try_repair_stuttered_json(text: str) -> tuple[dict, str] | None:
         if _looks_like_stutter(candidate, suffix):
             return obj, suffix
         return None
+    return _try_repair_internal_stutter(lines)
+
+
+def _try_repair_internal_stutter(lines: list[str]) -> tuple[dict, str] | None:
+    """Variante du bégaiement observée le 2026-07-21 sur un lot de résumés de
+    chapitres : Gemini a répété un fragment de la fin de la dernière valeur
+    sur une ligne parasite, puis a quand même refermé correctement le JSON
+    derrière ("}", "]", "}"). La ou les lignes fautives sont donc au MILIEU
+    du texte, suivies des fermetures légitimes : la coupe par la fin de
+    _try_repair_stuttered_json ne peut pas les atteindre sans emporter aussi
+    ces fermetures (et sa refermeture par un unique "}" ne conviendrait de
+    toute façon qu'à un bégaiement à la racine de l'objet, pas à la structure
+    imbriquée des lots de chapitres, qui exigerait "}" + "]" + "}").
+
+    Cherche un petit bloc de lignes contigu proche de la fin dont la
+    SUPPRESSION SEULE (sans rien ajouter) rend le JSON valide, en essayant
+    les blocs les plus petits d'abord, et pour une même taille les plus
+    proches de la fin d'abord. Un bloc n'est retenu QUE s'il est reconnu
+    comme un bégaiement du texte qui le précède (mêmes garde-fous stricts
+    que _looks_like_stutter) ; un bloc dont la suppression rend le JSON
+    valide mais qui contient du vrai contenu (ex. une entrée de chapitre
+    entière) est refusé, et contrairement à la coupe par la fin la recherche
+    continue avec les autres blocs : ici un bloc refusé signifie seulement
+    que ce n'était pas le bon emplacement, pas que le texte est ambigu."""
+    earliest = max(0, len(lines) - _STUTTER_REPAIR_MAX_LINES_DROPPED)
+    for size in range(1, _STUTTER_REPAIR_MAX_LINES_DROPPED + 1):
+        for start in range(len(lines) - size, earliest - 1, -1):
+            removed = "\n".join(lines[start:start + size]).strip()
+            if not removed:
+                continue
+            candidate = "\n".join(lines[:start] + lines[start + size:])
+            try:
+                obj = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if _looks_like_stutter("\n".join(lines[:start]), removed):
+                return obj, removed
     return None
 
 

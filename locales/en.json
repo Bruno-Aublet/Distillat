@@ -69,6 +69,18 @@
     "explanation": "Gemini produced this text in addition to the content used for the report. It may be a pointless repetition or legitimate content: check it and copy/paste anything you find useful.",
     "close_button": "Close"
   },
+  "quota_help_dialog": {
+    "window_title": "Understanding quotas and requests",
+    "tooltip": "Understanding quotas and requests",
+    "intro": "Distillat uses Gemini, Google's artificial intelligence, to read your book and write its summary. This access is free, but Google enforces usage limits on this free service, called \"quotas\".",
+    "requests_title": "What is a request?",
+    "requests_body": "Every time Distillat sends text to Gemini to be summarized, it counts as one \"request\". A small book only needs a single request. A larger book is split into several pieces (\"batches\"), each sent as its own request, followed by one final request that gathers everything into a complete report. That's why you may see a status like \"Batch 2 of 3\" during generation: it simply indicates which part of the book is currently being processed.",
+    "failures_title": "Why can a generation fail?",
+    "failures_body": "Two possible reasons: the quota has been reached (Google limits how many requests you can make per minute and per day; you then need to wait a few minutes for the per-minute limit, or until the next day for the daily limit, which resets every night), or the service is temporarily overloaded (Gemini can sometimes become briefly unavailable due to high demand from all its users; trying again a few minutes later is usually enough).",
+    "resume_title": "Good news: nothing is lost",
+    "resume_body": "If a generation stops partway through, Distillat keeps the work already done. The next time you start the application, a window lets you resume that book directly; generation then automatically continues where it left off, without starting over.",
+    "close_button": "Close"
+  },
   "eye_icon": {
     "tooltip": "Show/hide the key"
   },
@@ -163,6 +175,7 @@
     "tab_characters": "Characters",
     "tab_analysis": "Analysis",
     "no_detailed_summary": "No detailed summary available for this report.",
+    "idle_status": "Waiting for a book to summarize.",
     "starting_status": "Starting processing…",
     "elapsed_suffix": "{message} (elapsed: {elapsed})",
     "duration_minutes": "{minutes} min {seconds:02d} s",

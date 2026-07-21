@@ -289,7 +289,27 @@ sauvegarde JSON et/ou export PDF.
     fragments déjà présents dans la fin du texte accepté) ; sinon aucune
     réparation n'est tentée et l'erreur `GeminiError` normale remonte, pour ne
     jamais masquer un cas différent (ex. une vraie troncature en plein milieu
-    d'une valeur). Si même cette réparation échoue, `_log_unparsable_response()`
+    d'une valeur). Si aucune coupe par la fin ne donne de JSON valide,
+    `_try_repair_internal_stutter()` tente une seconde variante, repérée le
+    2026-07-21 sur un lot de résumés de chapitres
+    (`gemini_unparsable_chapter_summary_batch_20260721_164455_360147.txt`) :
+    Gemini avait répété un fragment de la fin de la dernière valeur sur une
+    ligne parasite puis avait quand même refermé correctement le JSON derrière
+    (`}` + `]` + `}`), plaçant la ligne fautive au milieu du texte, hors de
+    portée d'une coupe par la fin (qui emporterait aussi les fermetures
+    légitimes ; et la refermeture par un unique `}` ne conviendrait de toute
+    façon qu'à un bégaiement à la racine, pas à la structure imbriquée des
+    lots de chapitres). Cette variante cherche un petit bloc de lignes contigu
+    dans les `_STUTTER_REPAIR_MAX_LINES_DROPPED` dernières lignes dont la
+    suppression seule (sans rien ajouter) rend le JSON valide, blocs les plus
+    petits puis les plus proches de la fin d'abord, et ne retient un bloc que
+    si `_looks_like_stutter()` le reconnaît comme un bégaiement du texte qui
+    le précède ; contrairement à la coupe par la fin, un bloc refusé
+    n'interrompt pas la recherche (il signifie seulement que ce n'était pas le
+    bon emplacement). Dans les deux variantes, le texte de bégaiement retiré
+    est renvoyé comme `leftover` (donc conservé dans
+    `BookReport.extra_generated_text`, jamais jeté silencieusement). Si même
+    ces réparations échouent, `_log_unparsable_response()`
     sauvegarde la réponse brute complète (avec le contexte d'appel -
     `"consolidation"`, `"chapter_summary_batch"` ou `"full_report"`, passé en
     paramètre `context_label` à travers `_parse_full_report_json()`/
@@ -489,11 +509,17 @@ sauvegarde JSON et/ou export PDF.
     (non modale, pour le contenu superflu de Gemini), `LicenseDialog`,
     `ChangelogDialog` (affiche `CHANGELOG.md`, même mécanisme de résolution de
     chemin que `LicenseDialog` via `config.get_resource_dir()`, bundlé à la
-    compilation via `distillat.spec`). Ces trois dialogues utilisent un
+    compilation via `distillat.spec`), `QuotaHelpDialog` (texte statique fixe,
+    sans jargon technique, expliquant le fonctionnement des quotas/requêtes
+    Gemini au public non technique : ouverte via le bouton `?` placé à gauche
+    de `status_label`, ajouté le 2026-07-21). Ces quatre dialogues utilisent un
     `QPushButton` construit à la main pour leur bouton Fermer/OK, traduit via
     `tr()`, plutôt que `QDialogButtonBox.Close`/`.Ok` : ces boutons standards
     Qt restent affichés en anglais même en français faute de `QTranslator` Qt
-    installé pour cette locale (bug constaté le 2026-07-21). Le footer de
+    installé pour cette locale (bug constaté le 2026-07-21). `status_label`
+    affiche désormais un texte de repos (`main_window.idle_status`) plutôt que
+    de rester vide en l'absence de traitement en cours (auparavant vide, ce
+    qui isolait visuellement ce bouton `?` sans texte à côté). Le footer de
     `MainWindow` propose aussi, à droite du copyright, les liens « Code
     source » (`update_checker.repo_page_url()`) et « Téléchargement »
     (`update_checker.releases_page_url()`, déjà utilisé par le bandeau de mise

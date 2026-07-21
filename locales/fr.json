@@ -69,6 +69,18 @@
     "explanation": "Gemini a produit ce texte en plus du contenu utilisé pour la fiche. Il peut s'agir d'une répétition sans intérêt ou de contenu légitime : vérifiez-le et copiez-collez ce qui vous semble utile.",
     "close_button": "Fermer"
   },
+  "quota_help_dialog": {
+    "window_title": "Comprendre les quotas et les requêtes",
+    "tooltip": "Comprendre les quotas et les requêtes",
+    "intro": "Distillat utilise Gemini, l'intelligence artificielle de Google, pour lire votre livre et en rédiger le résumé. Cet accès est gratuit, mais Google impose des limites d'usage pour ce service gratuit, appelées des « quotas ».",
+    "requests_title": "Qu'est-ce qu'une requête ?",
+    "requests_body": "Chaque fois que Distillat envoie du texte à Gemini pour qu'il le résume, cela compte pour une « requête ». Un petit livre ne nécessite qu'une seule requête. Un livre plus volumineux est découpé en plusieurs morceaux (des « lots »), chacun envoyé dans sa propre requête, suivis d'une dernière requête qui rassemble le tout en une fiche complète. C'est pour cela que vous pouvez voir un statut du type « Lot 2 sur 3 » pendant la génération : cela indique simplement quelle partie du livre est en cours de traitement.",
+    "failures_title": "Pourquoi une génération peut-elle échouer ?",
+    "failures_body": "Deux raisons possibles : le quota est atteint (Google limite le nombre de requêtes que vous pouvez faire par minute et par jour ; il faut alors patienter quelques minutes pour la limite par minute, ou attendre le lendemain pour la limite par jour, qui se réinitialise chaque nuit), ou le service est momentanément surchargé (il arrive que Gemini soit temporairement indisponible en raison d'une forte demande de la part de tous ses utilisateurs ; un nouvel essai quelques minutes plus tard suffit généralement).",
+    "resume_title": "Bonne nouvelle : rien n'est perdu",
+    "resume_body": "Si une génération s'interrompt en cours de route, Distillat garde en mémoire le travail déjà accompli. Au prochain démarrage de l'application, une fenêtre vous permet de reprendre directement ce livre ; la génération continue alors automatiquement là où elle s'était arrêtée, sans rien recommencer.",
+    "close_button": "Fermer"
+  },
   "eye_icon": {
     "tooltip": "Afficher/masquer la clé"
   },
@@ -163,6 +175,7 @@
     "tab_characters": "Personnages",
     "tab_analysis": "Analyse",
     "no_detailed_summary": "Aucun résumé détaillé disponible pour cette fiche.",
+    "idle_status": "En attente d'un livre à résumer.",
     "starting_status": "Démarrage du traitement…",
     "elapsed_suffix": "{message} (écoulé : {elapsed})",
     "duration_minutes": "{minutes} min {seconds:02d} s",

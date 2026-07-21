@@ -18,7 +18,7 @@ L'application s'appuie sur le palier gratuit de Gemini 3.5 Flash.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.2.1**
+**Version 1.2.2**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
@@ -195,6 +195,10 @@ réel si la même clé API est utilisée ailleurs en parallèle (un autre outil,
 un test manuel via AI Studio...), auquel cas les compteurs affichés ne
 seront plus fiables.
 
+Une explication simplifiée de ce fonctionnement, sans jargon technique, est
+également accessible directement dans l'application via le bouton **?** situé
+à côté du statut de génération.
+
 ## Installation (développement)
 
 ```bash
@@ -330,7 +334,7 @@ The application relies on Gemini 3.5 Flash's free tier.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
 `.zip` file to download is at the bottom of the release page).
 
-**Version 1.2.1**
+**Version 1.2.2**
 
 Windows application with a PyQt5 interface to generate a complete reading
 report (summaries, characters, analysis) from an EPUB or PDF book, via the
@@ -494,6 +498,10 @@ sent. This tracking is **local to the application**: it does not reflect
 actual usage if the same API key is used elsewhere in parallel (another
 tool, a manual test via AI Studio...), in which case the displayed counters
 will no longer be accurate.
+
+A simplified, jargon-free explanation of how this works is also available
+directly in the application via the **?** button next to the generation
+status.
 
 ## Installation (development)
 
