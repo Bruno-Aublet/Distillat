@@ -1,5 +1,6 @@
 """Client Gemini : comptage de tokens, résumé/personnages/analyse, sans retry."""
 import json
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from google.genai import types as genai_types
 
 from app import config
 from app import i18n
+from app.__version__ import VERSION
 from app.book_report import BookReport, Character
 from app.epub_parser import Chapter, BookContent
 from app.i18n import tr
@@ -350,12 +352,21 @@ def _log_api_call(message: str) -> None:
     dashboard. Purgé au-delà de API_REQUESTS_LOG_MAX_GENERATIONS générations
     (voir _trim_api_requests_log) pour rester exploitable et transmissible
     sans grossir indéfiniment. Écriture best-effort : ne doit jamais faire
-    échouer un appel ni la génération."""
+    échouer un appel ni la génération.
+
+    Chaque ligne est préfixée par pid=<PID> (2026-07-22, support
+    multi-instances, voir app/instance_lock.py) : le fichier est partagé par
+    toutes les instances de Distillat lancées sur la machine
+    (get_debug_logs_dir() est unique, indépendant du mode de lancement), leurs
+    lignes s'entrelacent donc chronologiquement si plusieurs tournent en
+    parallèle. Ce préfixe permet de filtrer après coup les lignes d'une seule
+    instance (ex. grep "pid=12345") sans avoir à deviner la frontière entre
+    deux sessions."""
     try:
         log_path = config.get_debug_logs_dir() / "api_requests.log"
         timestamp = datetime.now().isoformat(timespec="seconds")
         with log_path.open("a", encoding="utf-8") as log_file:
-            log_file.write(f"{timestamp} {message}\n")
+            log_file.write(f"{timestamp} pid={os.getpid()} {message}\n")
     except OSError:
         pass
 
@@ -367,7 +378,7 @@ def _call_gemini(
     on_quota_update: QuotaCallback | None = None,
     estimated_input_tokens: int = 0,
     context_label: str = "",
-) -> str:
+) -> tuple[str, str | None]:
     """Effectue un seul appel à l'API Gemini, sans retry automatique : toute
     erreur (quota, service indisponible...) remonte immédiatement sous forme
     de GeminiError avec un message clair, laissant à l'utilisateur le choix
@@ -424,10 +435,19 @@ def _call_gemini(
             input_tokens = usage.prompt_token_count or 0
             output_tokens = usage.candidates_token_count or 0
             snapshot = quota_tracker.record_call(input_tokens=input_tokens, output_tokens=output_tokens)
+            # finish_reason est journalisé systématiquement, même quand text
+            # est exploitable : sans ça, une réponse tronquée par la limite de
+            # longueur du modèle (MAX_TOKENS) mais non vide (donc acceptée par
+            # le `if not text` ci-dessous) ne laissait aucune trace de sa
+            # cause réelle, seule l'erreur générique de parsing JSON qui en
+            # découlait plus tard était visible (cas vécu le 2026-07-22 sur
+            # une consolidation, diagnostiqué a posteriori uniquement grâce au
+            # fichier de log brut gemini_unparsable_*.txt).
+            finish_reason = response.candidates[0].finish_reason if response.candidates else None
             _log_api_call(
                 f"generate_content OK contexte={context_label} tokens_entree={input_tokens} "
                 f"tokens_sortie={output_tokens} duree={time.monotonic() - start:.1f}s "
-                f"requetes_jour={snapshot.requests_today}"
+                f"requetes_jour={snapshot.requests_today} finish_reason={finish_reason}"
             )
             text = response.text
             if not text:
@@ -436,10 +456,10 @@ def _call_gemini(
                 # retourné, notamment si les filtres de sécurité de Gemini
                 # ont bloqué la réponse : sans ce cas, l'utilisateur voyait
                 # un message technique brut au lieu d'une explication.
-                if response.candidates and response.candidates[0].finish_reason not in (None, "STOP"):
+                if finish_reason not in (None, "STOP"):
                     raise GeminiError(tr("gemini_errors.blocked_by_safety_filters"))
                 raise GeminiError(tr("gemini_errors.empty_response"))
-            return text
+            return text, finish_reason
         except genai_errors.APIError as exc:
             snapshot = quota_tracker.record_call(input_tokens=estimated_input_tokens, output_tokens=0)
             _log_api_call(
@@ -482,7 +502,7 @@ sur peu de personnages, plus pour une saga chorale) - n'invente jamais d'entrée
 nombre. Pour chaque personnage, rédige une description couvrant son rôle, sa personnalité et son \
 évolution ; pour chaque groupe ou organisation, décris plutôt son rôle dans l'intrigue, ses \
 objectifs et son influence sur les événements.
-4. Une ANALYSE littéraire d'au moins 600 à 900 mots, structurée en plusieurs paragraphes distincts \
+4. Une ANALYSE littéraire d'au moins 2500 à 4000 mots, structurée en plusieurs paragraphes distincts \
 couvrant les thèmes principaux, le style d'écriture et la construction narrative, puis la portée \
 de l'œuvre - développée et argumentée, sans répéter le contenu déjà couvert par les résumés.
 
@@ -560,7 +580,7 @@ sur peu de personnages, plus pour une saga chorale) - n'invente jamais d'entrée
 nombre. Pour chaque personnage, rédige une description couvrant son rôle, sa personnalité et son \
 évolution ; pour chaque groupe ou organisation, décris plutôt son rôle dans l'intrigue, ses \
 objectifs et son influence sur les événements.
-4. Une ANALYSE littéraire d'au moins 600 à 900 mots, structurée en plusieurs paragraphes distincts \
+4. Une ANALYSE littéraire d'au moins 2500 à 4000 mots, structurée en plusieurs paragraphes distincts \
 couvrant les thèmes principaux, le style d'écriture et la construction narrative, puis la portée \
 de l'œuvre - développée et argumentée, sans répéter le contenu déjà couvert par les résumés.
 
@@ -602,7 +622,7 @@ a short text or one centered on few characters, more for a sprawling ensemble sa
 an entry to reach this number. For each character, write a description covering their role, \
 personality, and development; for each group or organization, describe instead its role in the \
 plot, its goals, and its influence on events.
-4. A literary ANALYSIS of at least 600 to 900 words, structured in several distinct paragraphs \
+4. A literary ANALYSIS of at least 2500 to 4000 words, structured in several distinct paragraphs \
 covering the main themes, the writing style and narrative construction, then the work's significance \
 - developed and well-argued, without repeating content already covered by the summaries.
 
@@ -677,7 +697,7 @@ a short text or one centered on few characters, more for a sprawling ensemble sa
 an entry to reach this number. For each character, write a description covering their role, \
 personality, and development; for each group or organization, describe instead its role in the \
 plot, its goals, and its influence on events.
-4. A literary ANALYSIS of at least 600 to 900 words, structured in several distinct paragraphs \
+4. A literary ANALYSIS of at least 2500 to 4000 words, structured in several distinct paragraphs \
 covering the main themes, the writing style and narrative construction, then the work's significance \
 - developed and well-argued, without repeating content already covered by the summaries.
 
@@ -718,14 +738,19 @@ def default_prompt_templates() -> dict[str, str]:
     return _DEFAULT_PROMPT_TEMPLATES_BY_LANGUAGE[i18n.current_language()]
 
 
-def _get_prompt_template(key: str, use_custom_prompts: bool) -> str:
-    """Renvoie le template personnalisé par l'utilisateur pour ce prompt et
-    cette langue s'il existe, sinon le template par défaut de la langue
-    actuellement choisie (voir default_prompt_templates). Les personnalisations
-    sont propres à chaque langue : celles du français n'affectent jamais
-    l'anglais, et inversement."""
-    if use_custom_prompts:
-        custom = load_custom_prompts(i18n.current_language())
+def _get_prompt_template(key: str, use_custom_prompts: bool, profile_id: str | None) -> str:
+    """Renvoie le template personnalisé par l'utilisateur pour ce prompt,
+    cette langue et ce profil de clé API s'il existe, sinon le template par
+    défaut de la langue actuellement choisie (voir default_prompt_templates).
+    Les personnalisations sont propres à chaque profil et à chaque langue
+    (2026-07-22, support des profils multiples) : celles du français
+    n'affectent jamais l'anglais et inversement, et celles d'un profil
+    n'affectent jamais celles d'un autre. profile_id est None si aucun profil
+    n'est actif (ce qui ne devrait pas arriver en pratique, une génération
+    exigeant déjà une clé API donc un profil résolu) : dans ce cas, aucune
+    personnalisation n'est cherchée, comme si use_custom_prompts était faux."""
+    if use_custom_prompts and profile_id is not None:
+        custom = load_custom_prompts(i18n.current_language(), profile_id)
         if key in custom:
             return custom[key]
     return default_prompt_templates()[key]
@@ -742,10 +767,10 @@ def _format_prompt_template(template: str, prompt_label: str, **kwargs: str) -> 
         raise GeminiError(tr("gemini_errors.invalid_prompt_placeholder", prompt_label=prompt_label, error=exc)) from exc
 
 
-def _full_report_prompt(content: BookContent, use_custom_prompts: bool) -> str:
+def _full_report_prompt(content: BookContent, use_custom_prompts: bool, profile_id: str | None) -> str:
     """Un seul prompt demandant les deux résumés + personnages + analyse en une
     requête, pour un livre dont le texte tient dans la fenêtre de contexte du modèle."""
-    template = _get_prompt_template("full_report", use_custom_prompts)
+    template = _get_prompt_template("full_report", use_custom_prompts, profile_id)
     return _format_prompt_template(
         template,
         tr("prompts_dialog.tabs.full_report.title"),
@@ -766,12 +791,14 @@ def _chapters_batch_text(chapters: list[Chapter]) -> str:
     return "\n\n".join(f"[[[{marker}: {chapter.title}]]]\n{chapter.text}" for chapter in chapters)
 
 
-def _chapter_summary_prompt(book_title: str, author: str, batch: list[Chapter], use_custom_prompts: bool) -> str:
+def _chapter_summary_prompt(
+    book_title: str, author: str, batch: list[Chapter], use_custom_prompts: bool, profile_id: str | None
+) -> str:
     """Prompt de résumé appliqué à un LOT de chapitres consécutifs (voir
     _split_chapters_into_batches) plutôt qu'à un seul, pour limiter le nombre
     de requêtes envoyées à l'API sur le palier gratuit (quota quotidien très
     serré : 20 requêtes/jour par défaut)."""
-    template = _get_prompt_template("chapter_summary", use_custom_prompts)
+    template = _get_prompt_template("chapter_summary", use_custom_prompts, profile_id)
     return _format_prompt_template(
         template,
         tr("prompts_dialog.tabs.chapter_summary.title"),
@@ -782,13 +809,17 @@ def _chapter_summary_prompt(book_title: str, author: str, batch: list[Chapter], 
 
 
 def _consolidation_prompt(
-    book_title: str, author: str, chapter_summaries: list[tuple[str, str]], use_custom_prompts: bool
+    book_title: str,
+    author: str,
+    chapter_summaries: list[tuple[str, str]],
+    use_custom_prompts: bool,
+    profile_id: str | None,
 ) -> str:
     # Un chapitre au résumé vide (page sans contenu narratif, voir
     # _parse_chapter_summaries_batch_json) n'a rien à apporter à la
     # consolidation : l'inclure enverrait un titre suivi de rien à Gemini.
     joined = "\n\n".join(f"### {title}\n{summary}" for title, summary in chapter_summaries if summary)
-    template = _get_prompt_template("consolidation", use_custom_prompts)
+    template = _get_prompt_template("consolidation", use_custom_prompts, profile_id)
     return _format_prompt_template(
         template,
         tr("prompts_dialog.tabs.consolidation.title"),
@@ -810,6 +841,11 @@ def _strip_json_fences(raw_text: str) -> str:
 _STUTTER_TAIL_WINDOW = 200
 _STUTTER_MAX_SUFFIX_LENGTH = 80
 _STUTTER_IGNORED_CHARS = " \t\r\n{}\"',."
+# En dessous de cette longueur (normalisée), un fragment est accepté comme
+# bégaiement même si un de ses "mots" ne se retrouve pas tel quel dans la fin
+# du texte accepté (voir _looks_like_stutter) : à cette taille, la perte de
+# contenu légitime en cas de faux positif est de toute façon négligeable.
+_STUTTER_SHORT_FRAGMENT_LENGTH = 25
 
 
 def _normalize_for_stutter_check(text: str) -> str:
@@ -828,7 +864,14 @@ def _looks_like_stutter(accepted_text: str, suffix: str) -> bool:
     N'accepte comme bégaiement que ce qui est à la fois COURT et entièrement
     composé de fragments déjà présents dans la fin du texte accepté : un vrai
     contenu supplémentaire (second objet JSON légitime, texte nouveau) ne
-    remplit pas ce critère et n'est donc jamais réparé silencieusement."""
+    remplit pas ce critère et n'est donc jamais réparé silencieusement.
+
+    Exception, en dessous de _STUTTER_SHORT_FRAGMENT_LENGTH (fragment très
+    court, ex. un mot coupé en plein milieu comme "anation" pour
+    "profan[ation]") : le critère mot-à-mot est trop strict pour ce cas
+    (repéré le 2026-07-22 sur une consolidation) car un mot tronqué ne se
+    retrouve jamais tel quel dans le texte accepté. À cette taille, même un
+    faux positif ferait perdre au plus quelques caractères."""
     if not suffix or len(suffix) > _STUTTER_MAX_SUFFIX_LENGTH:
         return False
 
@@ -839,6 +882,9 @@ def _looks_like_stutter(accepted_text: str, suffix: str) -> bool:
     if not normalized_suffix:
         # Le suffixe ne contenait que de la ponctuation/espaces/accolades :
         # rien qui ressemble à du vrai contenu nouveau.
+        return True
+
+    if len(normalized_suffix) <= _STUTTER_SHORT_FRAGMENT_LENGTH:
         return True
 
     # Chaque fragment du suffixe (séparé par les caractères ignorés, ex. les
@@ -965,7 +1011,9 @@ def _log_unparsable_response(raw_text: str, context_label: str, error: json.JSON
         pass
 
 
-def _parse_json_object(raw_text: str, context_label: str = "unknown") -> tuple[dict, str]:
+def _parse_json_object(
+    raw_text: str, context_label: str = "unknown", finish_reason: str | None = None
+) -> tuple[dict, str]:
     """Parse le premier objet JSON de la réponse. Même en mode JSON natif de
     l'API, Gemini produit parfois du contenu superflu après un premier objet
     par ailleurs valide (ex : un second objet accolé) ; json.loads() rejette
@@ -983,7 +1031,16 @@ def _parse_json_object(raw_text: str, context_label: str = "unknown") -> tuple[d
     avant de lever l'erreur, pour permettre un diagnostic sur un futur cas non
     couvert par la réparation actuelle. context_label identifie l'appel Gemini
     en cause (ex. "consolidation", "chapter_summary_batch", "full_report")
-    dans le nom du fichier de log."""
+    dans le nom du fichier de log.
+
+    finish_reason (renvoyé par _call_gemini avec le texte brut) permet de
+    distinguer un cas de vraie troncature confirmée (MAX_TOKENS : la réponse
+    s'arrête net, sans texte superflu ni fermeture JSON, car le modèle a
+    atteint sa limite de longueur en cours de génération) d'un échec de
+    parsing sans cause connue, pour donner à l'utilisateur un message
+    explicite plutôt que l'erreur générique de format inattendu (cas vécu le
+    2026-07-22 sur une consolidation, où finish_reason n'était même pas
+    consulté puisque le texte reçu n'était pas vide)."""
     text = _strip_json_fences(raw_text)
     try:
         obj, end_index = json.JSONDecoder().raw_decode(text)
@@ -992,6 +1049,8 @@ def _parse_json_object(raw_text: str, context_label: str = "unknown") -> tuple[d
         if repaired is not None:
             return repaired
         _log_unparsable_response(raw_text, context_label, exc)
+        if finish_reason == "MAX_TOKENS":
+            raise GeminiError(tr("gemini_errors.truncated_response")) from exc
         raise GeminiError(tr("gemini_errors.unreadable_response", error=exc)) from exc
     leftover = text[end_index:].strip()
     return obj, leftover
@@ -1018,14 +1077,16 @@ def _parse_characters_list(data: list) -> list[Character]:
     return characters
 
 
-def _parse_full_report_json(raw_text: str, context_label: str = "full_report") -> tuple[str, str, list[Character], str, str]:
+def _parse_full_report_json(
+    raw_text: str, context_label: str = "full_report", finish_reason: str | None = None
+) -> tuple[str, str, list[Character], str, str]:
     """Parse la réponse combinée résumé + personnages + analyse. Le 4e élément
     retourné est le texte ignoré après le premier objet JSON (vide la plupart
     du temps). context_label distingue, dans le log de diagnostic en cas
     d'échec, l'appel "rapport complet" (livre tenant en une requête) de
     l'appel "consolidation" (dernière requête d'un livre découpé en lots) :
     même fonction de parsing, deux contextes d'appel différents."""
-    data, leftover = _parse_json_object(raw_text, context_label)
+    data, leftover = _parse_json_object(raw_text, context_label, finish_reason)
     if not isinstance(data, dict):
         # Le mode JSON natif de Gemini garantit une syntaxe JSON valide, mais
         # pas que la racine soit un objet conforme au schéma demandé (ex : une
@@ -1044,14 +1105,16 @@ def _parse_full_report_json(raw_text: str, context_label: str = "full_report") -
     return summary, detailed_summary, characters, analysis, leftover
 
 
-def _parse_chapter_summaries_batch_json(raw_text: str, batch: list[Chapter]) -> tuple[list[tuple[str, str]], str]:
+def _parse_chapter_summaries_batch_json(
+    raw_text: str, batch: list[Chapter], finish_reason: str | None = None
+) -> tuple[list[tuple[str, str]], str]:
     """Parse la réponse d'un lot de résumés de chapitre. Associe chaque résumé
     au titre du chapitre correspondant dans `batch` par position (et non par
     correspondance exacte du titre renvoyé par Gemini, qui peut légèrement
     différer de l'original) : le nombre d'entrées attendu est connu à
     l'avance, contrairement au cas des personnages où Gemini choisit lui-même
     combien d'entrées produire."""
-    data, leftover = _parse_json_object(raw_text, "chapter_summary_batch")
+    data, leftover = _parse_json_object(raw_text, "chapter_summary_batch", finish_reason)
     raw_summaries = data.get("chapter_summaries", [])
 
     summaries: list[tuple[str, str]] = []
@@ -1076,6 +1139,7 @@ def generate_book_report(
     on_progress: ProgressCallback | None = None,
     on_quota_update: QuotaCallback | None = None,
     use_custom_prompts: bool = True,
+    profile_id: str | None = None,
     resume_chapter_summaries: list[tuple[str, str]] | None = None,
     resume_batches_done: int = 0,
 ) -> BookReport:
@@ -1101,7 +1165,7 @@ def generate_book_report(
     _reset_api_call_totals()
     _trim_api_requests_log()
     _log_api_call(
-        f"generation DEBUT livre={_one_line(content.book_title)} modele={MODEL_NAME} "
+        f"generation DEBUT version={VERSION} livre={_one_line(content.book_title)} modele={MODEL_NAME} "
         f"reprise_lots_deja_faits={resume_batches_done} "
         f"requetes_jour_avant={quota_tracker.snapshot().requests_today}"
     )
@@ -1112,6 +1176,7 @@ def generate_book_report(
             on_progress=on_progress,
             on_quota_update=on_quota_update,
             use_custom_prompts=use_custom_prompts,
+            profile_id=profile_id,
             resume_chapter_summaries=resume_chapter_summaries,
             resume_batches_done=resume_batches_done,
         )
@@ -1136,6 +1201,7 @@ def _generate_book_report_impl(
     on_progress: ProgressCallback | None = None,
     on_quota_update: QuotaCallback | None = None,
     use_custom_prompts: bool = True,
+    profile_id: str | None = None,
     resume_chapter_summaries: list[tuple[str, str]] | None = None,
     resume_batches_done: int = 0,
 ) -> BookReport:
@@ -1147,7 +1213,7 @@ def _generate_book_report_impl(
         prompt: str,
         context_label: str,
         estimated_input_tokens: int = 0,
-    ) -> str:
+    ) -> tuple[str, str | None]:
         return _call_gemini(
             prompt,
             quota_tracker=quota_tracker,
@@ -1167,8 +1233,11 @@ def _generate_book_report_impl(
         # sont demandés en une seule requête pour limiter la consommation de quota.
         _log_api_call(f"generation MODE une_seule_requete tokens_texte={token_count}")
         report(0, 1, tr("gemini_progress.single_request", token_count=token_count))
+        raw_text, finish_reason = call(
+            _full_report_prompt(content, use_custom_prompts, profile_id), "full_report", estimated_input_tokens=token_count
+        )
         summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
-            call(_full_report_prompt(content, use_custom_prompts), "full_report", estimated_input_tokens=token_count)
+            raw_text, finish_reason=finish_reason
         )
         if leftover:
             leftovers.append(leftover)
@@ -1184,6 +1253,44 @@ def _generate_book_report_impl(
         # les résumés de chapitre et produit le résumé court, le résumé
         # détaillé, les personnages et l'analyse littéraire.
         batches = _split_chapters_into_batches(content.chapters)
+
+        if len(batches) == 1 and not resume_chapter_summaries:
+            # count_tokens(full_text) mesuré en bloc peut dépasser
+            # MAX_TOKENS_PER_REQUEST alors que la somme des comptages par
+            # chapitre (utilisée par _split_chapters_into_batches) tient en un
+            # seul lot : écart de mesure du tokenizer, pas un vrai dépassement
+            # (MAX_TOKENS_PER_REQUEST garde 50 000 tokens de marge sous la
+            # vraie limite TPM de 250 000, largement suffisant pour absorber
+            # cet écart et les instructions ajoutées par le prompt full_report).
+            # Dans ce cas, traiter comme le mode une seule requête plutôt que
+            # d'enchaîner résumé-de-lot puis consolidation : même résultat,
+            # une requête Gemini économisée sur un quota quotidien serré.
+            _log_api_call(f"generation MODE une_seule_requete_lot_unique tokens_texte={token_count}")
+            report(0, 1, tr("gemini_progress.single_request", token_count=token_count))
+            raw_text, finish_reason = call(
+                _full_report_prompt(content, use_custom_prompts, profile_id), "full_report", estimated_input_tokens=token_count
+            )
+            summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
+                raw_text, finish_reason=finish_reason
+            )
+            if leftover:
+                leftovers.append(leftover)
+            was_split = False
+            chapter_count = 1
+            report(1, 1, tr("gemini_progress.done"))
+            return BookReport(
+                book_title=content.book_title,
+                author=content.author,
+                summary_text=summary_text,
+                detailed_summary_text=detailed_summary_text,
+                characters=characters,
+                extra_generated_text="\n\n---\n\n".join(leftovers),
+                analysis_text=analysis_text,
+                cover_image=content.cover_image,
+                was_split=was_split,
+                chapter_count=chapter_count,
+            )
+
         _log_api_call(
             f"generation MODE decoupage_en_lots lots={len(batches)} "
             f"chapitres={len(content.chapters)} tokens_texte={token_count} "
@@ -1206,13 +1313,13 @@ def _generate_book_report_impl(
         for i, (batch, batch_tokens) in enumerate(batches[start_index:], start=start_index + 1):
             report(i - 1, total_steps, tr("gemini_progress.summarizing_batch", current=i, total=len(batches)))
             try:
+                raw_text, finish_reason = call(
+                    _chapter_summary_prompt(content.book_title, content.author, batch, use_custom_prompts, profile_id),
+                    f"chapter_summary_batch_{i}/{len(batches)}",
+                    estimated_input_tokens=batch_tokens,
+                )
                 batch_summaries, leftover = _parse_chapter_summaries_batch_json(
-                    call(
-                        _chapter_summary_prompt(content.book_title, content.author, batch, use_custom_prompts),
-                        f"chapter_summary_batch_{i}/{len(batches)}",
-                        estimated_input_tokens=batch_tokens,
-                    ),
-                    batch,
+                    raw_text, batch, finish_reason=finish_reason
                 )
             except GeminiError as exc:
                 if chapter_summaries:
@@ -1230,15 +1337,17 @@ def _generate_book_report_impl(
             report(i, total_steps, tr("gemini_progress.batch_summarized", current=i, total=len(batches)))
 
         report(len(batches), total_steps, tr("gemini_progress.merging_summaries"))
-        consolidation_prompt = _consolidation_prompt(content.book_title, content.author, chapter_summaries, use_custom_prompts)
+        consolidation_prompt = _consolidation_prompt(
+            content.book_title, content.author, chapter_summaries, use_custom_prompts, profile_id
+        )
         try:
-            summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
-                call(
-                    consolidation_prompt,
-                    "consolidation",
-                    estimated_input_tokens=count_tokens(consolidation_prompt, "consolidation"),
-                ),
+            raw_text, finish_reason = call(
+                consolidation_prompt,
                 "consolidation",
+                estimated_input_tokens=count_tokens(consolidation_prompt, "consolidation"),
+            )
+            summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
+                raw_text, "consolidation", finish_reason=finish_reason
             )
         except GeminiError as exc:
             raise PartialGenerationError(

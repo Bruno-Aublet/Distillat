@@ -46,8 +46,8 @@ TPM_LIMIT = DEFAULT_TPM_LIMIT
 RPD_LIMIT = DEFAULT_RPD_LIMIT
 
 _WINDOW_SECONDS = 60.0
-_LIMITS_FILENAME = "quota_limits.json"
 _LEGACY_DAILY_STATE_FILENAME = ".quota_state.json"
+_LEGACY_QUOTA_LIMITS_FILENAME = "quota_limits.json"
 
 
 def api_key_hash(api_key: str) -> str:
@@ -68,10 +68,20 @@ def daily_state_path_for_key(settings_dir: Path, api_key: str) -> Path:
     return settings_dir / f".quota_state_{api_key_hash(api_key)}.json"
 
 
-def load_quota_limits(settings_dir: Path) -> tuple[int, int, int]:
-    """Charge les limites RPM/TPM/RPD personnalisées par l'utilisateur, ou les
-    valeurs par défaut si aucune personnalisation n'a été enregistrée."""
-    limits_path = settings_dir / _LIMITS_FILENAME
+def quota_limits_path_for_key(settings_dir: Path, api_key: str) -> Path:
+    """Chemin du fichier de limites RPM/TPM/RPD propre à une clé API donnée :
+    un fichier par compte (comme daily_state_path_for_key ci-dessus), pour
+    que deux comptes Google avec des paliers différents (gratuit standard,
+    payant...) puissent avoir des limites configurées différentes, plutôt que
+    de partager un seul quota_limits.json global (2026-07-22, support des
+    profils multiples, voir app/instance_lock.py)."""
+    return settings_dir / f"quota_limits_{api_key_hash(api_key)}.json"
+
+
+def load_quota_limits(limits_path: Path) -> tuple[int, int, int]:
+    """Charge les limites RPM/TPM/RPD personnalisées par l'utilisateur pour ce
+    fichier précis (voir quota_limits_path_for_key), ou les valeurs par
+    défaut si aucune personnalisation n'a été enregistrée."""
     if limits_path.exists():
         try:
             data = json.loads(limits_path.read_text(encoding="utf-8"))
@@ -85,8 +95,7 @@ def load_quota_limits(settings_dir: Path) -> tuple[int, int, int]:
     return DEFAULT_RPM_LIMIT, DEFAULT_TPM_LIMIT, DEFAULT_RPD_LIMIT
 
 
-def save_quota_limits(settings_dir: Path, rpm_limit: int, tpm_limit: int, rpd_limit: int) -> None:
-    limits_path = settings_dir / _LIMITS_FILENAME
+def save_quota_limits(limits_path: Path, rpm_limit: int, tpm_limit: int, rpd_limit: int) -> None:
     limits_path.write_text(
         json.dumps({"rpm_limit": rpm_limit, "tpm_limit": tpm_limit, "rpd_limit": rpd_limit}),
         encoding="utf-8",
@@ -121,6 +130,7 @@ class QuotaTracker:
 
     daily_state_path: Path
     settings_dir: Path | None = None
+    quota_limits_path: Path | None = None
     input_tokens_total: int = 0
     output_tokens_total: int = 0
     _recent_calls: list[_Call] = field(default_factory=list)
@@ -135,15 +145,15 @@ class QuotaTracker:
 
     def __post_init__(self) -> None:
         self._load_daily_state()
-        if self.settings_dir is not None:
-            self._rpm_limit, self._tpm_limit, self._rpd_limit = load_quota_limits(self.settings_dir)
+        if self.quota_limits_path is not None:
+            self._rpm_limit, self._tpm_limit, self._rpd_limit = load_quota_limits(self.quota_limits_path)
 
     def reload_limits(self) -> None:
         """Recharge les limites depuis le disque (après modification par
         l'utilisateur via le dialogue de configuration des quotas)."""
-        if self.settings_dir is not None:
+        if self.quota_limits_path is not None:
             with self._lock:
-                self._rpm_limit, self._tpm_limit, self._rpd_limit = load_quota_limits(self.settings_dir)
+                self._rpm_limit, self._tpm_limit, self._rpd_limit = load_quota_limits(self.quota_limits_path)
 
     def switch_api_key(self, api_key: str) -> QuotaSnapshot:
         """À appeler dès que la clé API à utiliser pour la prochaine
@@ -155,7 +165,11 @@ class QuotaTracker:
         mémoire d'une génération déjà en cours avec la même clé. L'état en
         mémoire (tokens cumulés, fenêtre glissante RPM, requêtes en vol) est
         remis à zéro avant de recharger le compteur RPD persistant du
-        nouveau fichier : ces valeurs n'ont aucun sens pour un autre compte."""
+        nouveau fichier : ces valeurs n'ont aucun sens pour un autre compte.
+        Les limites RPM/TPM/RPD configurées sont elles aussi rechargées
+        depuis le fichier propre à cette clé (quota_limits_<hash>.json,
+        2026-07-22), pour le cas où deux comptes auraient des paliers
+        différents (gratuit standard, payant...)."""
         with self._lock:
             new_hash = api_key_hash(api_key)
             if new_hash == self._api_key_hash:
@@ -164,6 +178,9 @@ class QuotaTracker:
             if self.settings_dir is not None:
                 self.daily_state_path = daily_state_path_for_key(self.settings_dir, api_key)
                 self._migrate_legacy_daily_state_if_needed()
+                self.quota_limits_path = quota_limits_path_for_key(self.settings_dir, api_key)
+                self._migrate_legacy_quota_limits_if_needed()
+                self._rpm_limit, self._tpm_limit, self._rpd_limit = load_quota_limits(self.quota_limits_path)
             self.input_tokens_total = 0
             self.output_tokens_total = 0
             self._recent_calls = []
@@ -210,6 +227,23 @@ class QuotaTracker:
             return
         try:
             legacy_path.replace(self.daily_state_path)
+        except OSError:
+            pass
+
+    def _migrate_legacy_quota_limits_if_needed(self) -> None:
+        """Reprend l'ancien fichier de limites unique quota_limits.json (non
+        distingué par clé API, avant ce fix du 2026-07-22) vers le fichier de
+        la clé actuellement sélectionnée, uniquement si celui-ci n'existe pas
+        encore - même logique que _migrate_legacy_daily_state_if_needed()
+        ci-dessus (renommage, pas de copie : ne migre qu'une fois, vers la
+        première clé utilisée après cette mise à jour)."""
+        if self.settings_dir is None or self.quota_limits_path is None or self.quota_limits_path.exists():
+            return
+        legacy_path = self.settings_dir / _LEGACY_QUOTA_LIMITS_FILENAME
+        if not legacy_path.exists():
+            return
+        try:
+            legacy_path.replace(self.quota_limits_path)
         except OSError:
             pass
 

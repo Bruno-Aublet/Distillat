@@ -8,7 +8,8 @@
   },
   "epub_parser": {
     "fallback_chapter_title": "Chapter {index}",
-    "no_text_extracted": "No text content could be extracted from this EPUB."
+    "no_text_extracted": "No text content could be extracted from this EPUB.",
+    "uncompressed_too_large": "This EPUB file declares an abnormally large uncompressed content ({size_mb} MB, limit: {max_mb} MB) and was rejected as a precaution: it is most likely a corrupted or booby-trapped file, not a real book."
   },
   "pdf_parser": {
     "no_text_extracted": "No text could be extracted from this PDF (it may be a scan without OCR).",
@@ -34,6 +35,7 @@
     "empty_response": "Empty response received from the Gemini API.",
     "invalid_prompt_placeholder": "The custom prompt \"{prompt_label}\" contains an error: the placeholder {error} is not recognized. Check its spelling in the Prompts window (\"Reset this prompt\" button if needed).",
     "unreadable_response": "Unreadable response from Gemini (unexpected format): {error}",
+    "truncated_response": "Gemini's response was cut off mid-generation because it was too long (the model's length limit was reached): the content received is incomplete and unusable.",
     "unexpected_response_shape": "The Gemini response does not have the expected shape (unusable JSON root).",
     "no_usable_summary": "The Gemini response does not contain a usable summary."
   },
@@ -84,16 +86,43 @@
   "eye_icon": {
     "tooltip": "Show/hide the key"
   },
-  "api_key_dialog": {
-    "window_title": "Gemini API key",
+  "profiles_dialog": {
+    "window_title": "API key profiles",
+    "list_info": "Each profile corresponds to a distinct Gemini API key. On startup, the application automatically picks the first profile not already in use by another Distillat instance running on this computer.",
+    "edit_window_title": "Gemini API key",
     "info": "Get your free key on <a href=\"https://aistudio.google.com/apikey\">Google AI Studio</a>. It will be stored encrypted via the Windows Credential Manager - do not share it.",
+    "account_warning": "⚠️ The link opens your browser on whichever Google account is currently signed in by default: if you want a key for a different Google account, sign out first (or open the link in a private/incognito window).",
     "warning": "⚠️ Never click \"Enable billing\": you would lose Gemini's free tier.",
+    "name_label": "Profile name:",
+    "name_placeholder": "E.g.: Main account",
     "key_placeholder": "AIza...",
     "key_label": "API key:",
-    "missing_key_title": "Missing API key",
-    "missing_key_message": "Please enter a valid API key.",
+    "use_button": "Use",
+    "add_button": "Add",
+    "edit_button": "Edit",
+    "delete_button": "Delete",
+    "close_button": "Close",
+    "active_suffix": " (active in this window)",
+    "locked_suffix": " (in use by another window)",
+    "missing_fields_title": "Missing fields",
+    "missing_fields_message": "Please enter a valid name and API key.",
+    "duplicate_name_title": "Name already in use",
+    "duplicate_name_message": "A profile named \"{name}\" already exists. Choose a different name.",
+    "duplicate_key_title": "API key already registered",
+    "duplicate_key_message": "This API key is already registered under the profile \"{name}\". The same key cannot be used by two different profiles.",
     "save_error_title": "Save error",
-    "save_error_message": "Could not save the API key: the Windows Credential Manager is unavailable."
+    "save_error_message": "Could not save the API key: the Windows Credential Manager is unavailable.",
+    "delete_confirm_title": "Delete this profile?",
+    "delete_confirm_message": "Permanently delete the profile \"{name}\" and its saved API key?",
+    "delete_confirm_yes": "Delete",
+    "delete_confirm_no": "Cancel",
+    "locked_title": "Profile already in use",
+    "locked_message": "The profile \"{name}\" is currently in use by another Distillat window open on this computer.",
+    "in_use_title": "Profile in use",
+    "in_use_generation_message": "Cannot delete the profile \"{name}\": a generation is currently running with this profile in this window. Wait for it to finish before deleting it.",
+    "switch_during_generation_message": "Cannot switch the active profile: a generation is currently running with the current profile in this window. Wait for it to finish before switching profiles.",
+    "save_button": "Save",
+    "cancel_button": "Cancel"
   },
   "quota_limits_dialog": {
     "window_title": "Gemini quota limits",
@@ -103,14 +132,22 @@
     "tpm_label": "Tokens per minute (TPM):",
     "rpd_label": "Requests per day (RPD):",
     "save_error_title": "Save error",
-    "save_error_message": "Could not save the quota limits: {error}"
+    "save_error_message": "Could not save the quota limits: {error}",
+    "no_profile_title": "No active profile",
+    "no_profile_message": "Quota limits are specific to each API key profile. Select or create a profile first via the \"Profiles\" button.",
+    "ok_button": "OK",
+    "cancel_button": "Cancel"
   },
   "prompts_dialog": {
     "window_title": "Gemini prompts",
     "warning": "⚠️ These prompts directly drive report generation and work as-is. Editing them may cause generation to fail or produce inconsistent results (unusable output, response not recognized by the application, etc.): edit them at your own risk. The portions between curly braces, e.g. {book_title} or {full_text}, are automatically substituted by the application: do not remove them or change their spelling, or you will cause an error.",
     "reset_button": "Reset this prompt",
+    "save_button": "Save",
+    "cancel_button": "Cancel",
     "save_error_title": "Save error",
     "save_error_message": "Could not save the prompts: {error}",
+    "no_profile_title": "No active profile",
+    "no_profile_message": "Custom prompts are specific to each API key profile. Select or create a profile first via the \"Profiles\" button.",
     "tabs": {
       "full_report": {
         "title": "Summary + characters + analysis",
@@ -144,9 +181,16 @@
   "main_window": {
     "window_title": "Distillat v{version} - Book summaries with Gemini",
     "title_label": "Distillat",
+    "new_instance_button": "New instance",
+    "max_instances_title": "Too many instances open",
+    "max_instances_message": "{max_instances} instances of Distillat are already open on this computer. Close one before opening a new one.",
+    "new_instance_error_title": "Launch error",
+    "new_instance_error_message": "Could not launch a new Distillat instance: {error}",
     "prompts_button": "Prompts",
     "quota_limits_button": "Quota limits",
-    "api_key_button": "API key",
+    "profiles_button": "Profiles",
+    "active_profile_label": "Profile: {name}",
+    "no_profile_label": "No active profile",
     "output_language_hint": "Reports are generated in English: this setting also determines the language of the summaries produced by Gemini.",
     "update_banner": "<a href=\"#\">🆕 A new version of Distillat is available (v{version}), click to download it</a>",
     "no_file_selected": "No file selected",
@@ -164,6 +208,10 @@
     "download_link": "Download",
     "changelog_link": "Changelog",
     "no_cover": "No cover",
+    "set_cover_action": "Set cover image...",
+    "set_cover_dialog_title": "Choose a cover image",
+    "set_cover_dialog_filter": "Images (*.jpg *.jpeg *.png *.bmp *.gif *.webp)",
+    "set_cover_invalid_image": "This file is not a valid image.",
     "summary_placeholder": "The short summary will appear here after processing.",
     "detailed_summary_placeholder": "The detailed summary will appear here after processing.",
     "characters_placeholder": "The main characters will appear here after processing.",
@@ -193,7 +241,7 @@
     "quota_exceeded_warning": "🚫 Gemini quota exceeded, the app can no longer make requests for now. Try again later (the per-minute quota resets in 60 s, the daily quota at midnight Pacific Time).",
     "resume_wait_hint_daily": "It's the DAILY quota (number of requests/day) that is exhausted: it only resets at midnight Pacific Time (California), so you'll need to wait before resuming. Once that time has passed, ",
     "resume_wait_hint_minute": "It's the PER-MINUTE quota (requests or tokens/minute) that is temporarily exceeded: it generally clears itself in under 2 minutes. Once that time has passed, ",
-    "resume_wait_hint_other": "This isn't a quota issue: there's nothing to wait for, it's probably a one-off generation glitch. You can try again right away, ",
+    "resume_wait_hint_other": "This isn't a quota issue, it's probably a one-off generation glitch. You can try again right away, ",
     "resume_hint_suffix": "\n\nNothing is lost: the {batches_done}/{batches_total} chapter batch(es) already summarized successfully have been saved. {wait_hint}drag and drop this same EPUB/PDF file again and click \"Summarize\": Distillat will automatically recognize where processing had stopped and offer to resume from exactly that point, without redoing work already done.",
     "error_title": "Error",
     "save_pdf_dialog_title": "Save the summary",

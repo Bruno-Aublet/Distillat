@@ -7,7 +7,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('LICENSE', '.'), ('CHANGELOG.md', '.'), ('icons/open-book_4681875.png', 'icons'), ('locales', 'locales')]
+    datas=[('LICENSE', '.'), ('CHANGELOG.md', '.'), ('icons/open-book_4681875.png', 'icons'), ('locales', 'locales'), ('assets/success.wav', 'assets')]
     + collect_data_files('tzdata'),
     hiddenimports=[
         'google.genai',
@@ -19,6 +19,8 @@ a = Analysis(
         'keyring.backends.Windows',
         'send2trash.win',
         'tzdata',
+        'psutil',
+        'psutil._psutil_windows',
     ],
     hookspath=[],
     hooksconfig={},

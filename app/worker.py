@@ -34,6 +34,7 @@ class SummarizeWorker(QThread):
         book_path: str,
         api_key: str,
         quota_tracker: QuotaTracker,
+        profile_id: str | None = None,
         resume_state: ResumeState | None = None,
         parent=None,
     ):
@@ -41,6 +42,7 @@ class SummarizeWorker(QThread):
         self.book_path = book_path
         self.api_key = api_key
         self.quota_tracker = quota_tracker
+        self.profile_id = profile_id
         self.resume_state = resume_state
 
     def run(self) -> None:
@@ -70,6 +72,7 @@ class SummarizeWorker(QThread):
                 quota_tracker=self.quota_tracker,
                 on_progress=on_progress,
                 on_quota_update=on_quota_update,
+                profile_id=self.profile_id,
                 resume_chapter_summaries=resume_summaries,
                 resume_batches_done=resume_batches_done,
             )

@@ -11,4 +11,5 @@ keyring==25.7.0
 send2trash==2.1.0
 packaging==26.2
 tzdata==2026.3
+psutil==7.1.3
 pyinstaller==6.21.0

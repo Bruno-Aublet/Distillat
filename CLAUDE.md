@@ -13,7 +13,41 @@
 - Une confirmation donnée pour une action précise ne vaut pas autorisation
   générale pour des actions similaires ou connexes.
 
-## 2. Signaler, ne jamais corriger silencieusement un problème hors scope
+## 2. Question à choix multiples (AskUserQuestion) : autorisée en mode plan
+   uniquement
+
+- L'outil de question à choix multiples (AskUserQuestion) est autorisé
+  uniquement pendant le mode plan (assoupli le 2026-07-22, sur demande
+  explicite de l'utilisateur).
+- En dehors du mode plan, interdiction ferme d'utiliser cet outil : en cas de
+  besoin de clarification, poser la question en texte libre, normal, dans la
+  conversation - jamais sous forme de choix structurés/boutons.
+
+## 3. Jamais de bouton Qt standard non traduit
+
+- Interdiction ferme et permanente d'utiliser un bouton standard PyQt5 dont le
+  texte n'est pas piloté par `app/i18n.py` (`tr(...)`). Concrètement,
+  n'utilise JAMAIS les rôles standard de `QDialogButtonBox`
+  (`QDialogButtonBox.Ok`, `.Cancel`, `.Yes`, `.No`, `.Close`, `.Save`,
+  `.Discard`, `.Apply`, `.Reset`, `.RestoreDefaults`, `.Help`, `.Abort`,
+  `.Retry`, `.Ignore`, etc.) : leur texte vient des traductions intégrées de
+  Qt, pas de `locales/fr.json`/`locales/en.json`, et reste donc figé dans une
+  langue indépendante de celle choisie par l'utilisateur dans l'application
+  (ex. bouton "Cancel" resté en anglais alors que l'interface est en
+  français).
+- À la place, toujours construire les boutons d'un `QDialogButtonBox` via
+  `addButton(tr("clé.appropriée"), QDialogButtonBox.AcceptRole)` (ou
+  `.RejectRole`, `.ActionRole`, etc. selon le rôle voulu), avec une clé de
+  traduction dédiée ajoutée dans les deux fichiers `locales/*.json`.
+- Raison : bug découvert le 2026-07-22 sur `PromptsDialog`
+  (`app/main_window.py`) - le bouton "Sauvegarder" avait bien été traduit via
+  un `QPushButton` custom, mais le bouton "Annuler" avait été laissé en
+  `QDialogButtonBox.Cancel` standard, affichant "Cancel" même en interface
+  française.
+- S'applique à toute nouvelle fenêtre ou tout nouveau dialogue ajouté par la
+  suite.
+
+## 4. Signaler, ne jamais corriger silencieusement un problème hors scope
 
 - Si un bug, une incohérence ou un problème est découvert en dehors du
   périmètre exact de la demande en cours : le signaler explicitement à
@@ -21,18 +55,18 @@
 - Ne jamais élargir le scope d'une tâche de sa propre initiative, même pour
   « bien faire » ou « en profiter ».
 
-## 3. En cas d'erreur
+## 5. En cas d'erreur
 
 - Si une action non autorisée a été faite par erreur, l'annuler immédiatement
   et proprement, puis attendre les instructions de la suite.
 
-## 4. Typographie
+## 6. Typographie
 
 - Ne JAMAIS utiliser de tiret cadratin (—) ni de tiret demi-cadratin (–), dans
   aucun texte produit pour ce projet : code, commentaires, UI, README,
   CHANGELOG, messages. Utiliser un tiret simple (-) ou reformuler la phrase.
 
-## 5. CHANGELOG.md : une entrée = une seule ligne physique
+## 7. CHANGELOG.md : une entrée = une seule ligne physique
 
 - Chaque item de liste (`- ...`) du CHANGELOG doit rester sur une seule ligne
   physique dans le fichier source, aussi longue soit-elle : jamais de retour à
@@ -45,7 +79,7 @@
 - S'applique à toute nouvelle entrée ajoutée au CHANGELOG, y compris par
   Claude.
 
-## 6. Ne jamais dédoubler l'emplacement de stockage d'un fichier persistant
+## 8. Ne jamais dédoubler l'emplacement de stockage d'un fichier persistant
 
 - Un fichier de données persistantes de l'application (état de quota, config,
   dernier dossier utilisé, etc.) doit toujours être lu et écrit au même
@@ -65,7 +99,7 @@
 - S'applique à tout nouveau fichier de persistance ajouté par la suite : un
   seul chemin de résolution, indépendant du mode de lancement.
 
-## 7. Internationalisation (i18n) : logique de détection de langue au premier démarrage
+## 9. Internationalisation (i18n) : logique de détection de langue au premier démarrage
 
 - Au premier démarrage (aucune langue encore enregistrée dans `settings.json`),
   la langue est déterminée par la langue du système Windows selon une logique
@@ -90,7 +124,7 @@
 
 Voir le skill `add-language` (`.claude/skills/add-language/SKILL.md`).
 
-## 8. Toujours consulter ARCHITECTURE.md avant de chercher ou modifier un module
+## 10. Toujours consulter ARCHITECTURE.md avant de chercher ou modifier un module
 
 - Avant de chercher des informations sur un module (comportement, signature,
   structure de données, fichier de persistance...) ou de le modifier,
@@ -107,6 +141,57 @@ Voir le skill `add-language` (`.claude/skills/add-language/SKILL.md`).
 - `CLAUDE.md` ne garde qu'un résumé d'une ligne par module (voir l'index
   ci-dessous) : ce n'est qu'un point d'entrée, jamais une source suffisante en
   soi.
+
+## 11. INTERDICTION ABSOLUE de faire tourner du code de test/diagnostic sur
+    l'état réel de l'utilisateur (settings.json, keyring, %APPDATA%\Distillat)
+
+- Tout script Python exécuté via Bash/PowerShell pour tester, vérifier ou
+  déboguer un comportement (ex : `python -c "..."`, script jetable dans le
+  scratchpad) doit **systématiquement** utiliser un état entièrement isolé
+  et jetable : un dossier de config temporaire dédié (jamais
+  `config.get_settings_dir()`/`config.get_app_dir()` réels), et jamais
+  l'entrée keyring réelle du service `Distillat` (jamais
+  `keyring.get_password`/`set_password`/`delete_password` avec le vrai
+  `KEYRING_SERVICE_NAME` sans un nom de compte/profil fictif garanti bidon).
+- Interdiction stricte d'appeler `config.list_profiles()`,
+  `config.save_profiles(...)`, `config.delete_profile_api_key(...)`,
+  `config.load_api_key()`/`save_api_key()`/`load_settings()`/
+  `save_settings()` (ou tout équivalent qui lit/écrit l'état réel de
+  l'application) dans un script de test "pour nettoyer avant de commencer",
+  même avec l'intention de tout restaurer après : si l'utilisateur a de
+  vraies données à cet emplacement (profils, clés API, réglages), les vider
+  au nom d'un "nettoyage préalable" de test les détruit réellement, sans
+  recours - **et une clé API supprimée du Gestionnaire d'identification
+  Windows ne peut PAS être retrouvée depuis l'application ensuite**, même si
+  elle reste valide côté Google (il faut alors que l'utilisateur aille la
+  regénérer/retrouver lui-même sur https://aistudio.google.com/apikey).
+- Raison : incident vécu **deux fois** le 2026-07-22 dans la même
+  conversation. La première fois, un script de test de migration a exécuté
+  `keyring.delete_password(config.KEYRING_SERVICE_NAME,
+  config.KEYRING_USERNAME)` en pensant "nettoyer une clé de test", sans
+  jamais vérifier qu'il y avait une vraie clé de l'utilisateur à cet
+  emplacement avant de commencer - elle y était, et a été perdue. La seconde
+  fois, quelques échanges plus tard dans la même session, un script de test
+  de `find_profile_by_name()`/`find_profile_by_api_key()` a exécuté
+  `for p in config.list_profiles(): config.delete_profile_api_key(p['id'])`
+  puis `config.save_profiles([])` comme "nettoyage préalable" avant de créer
+  des profils fictifs de test - or `config.list_profiles()` a retourné le
+  VRAI profil de l'utilisateur ("Bruno", avec sa vraie clé API), qui a donc
+  été supprimé une seconde fois, avec le même mécanisme de perte
+  irrécupérable (l'identifiant du profil, seul moyen de retrouver son entrée
+  keyring, n'existait plus que dans `settings.json`, lui-même vidé au même
+  moment).
+- Marche à suivre correcte pour tout futur test similaire : soit passer un
+  `settings_dir`/chemin explicitement factice à chaque fonction qui
+  l'accepte en paramètre, soit monkey-patcher `config.get_settings_dir()`
+  pour qu'elle pointe vers un dossier temporaire du scratchpad le temps du
+  test, soit (le plus sûr) écrire un vrai test automatisé
+  (`pytest`/`unittest`) avec fixtures qui isolent complètement
+  l'environnement plutôt qu'un script `python -c` ad hoc qui touche
+  l'état réel par défaut. En cas de doute sur l'état réellement présent à un
+  emplacement avant d'y toucher (même pour un test) : lire d'abord ce qui
+  s'y trouve et le signaler à l'utilisateur, ne jamais supposer qu'il ne
+  contient que des données jetables.
 
 # Carte de l'application
 
@@ -134,9 +219,11 @@ sauvegarde JSON et/ou export PDF.
 - **`main.py`** : point d'entrée, migration, init langue, lance `MainWindow`.
 - **`app/worker.py`** (`SummarizeWorker`) : extraction + appel Gemini hors
   thread UI.
-- **`app/config.py`** : emplacements de stockage persistants, clé API
-  (keyring), `settings.json` (langue, prompts, derniers dossiers), migration
-  des anciens fichiers.
+- **`app/config.py`** : emplacements de stockage persistants, profils de clé
+  API nommés (keyring), `settings.json` (langue, prompts par profil, derniers
+  dossiers), migration des anciens fichiers.
+- **`app/instance_lock.py`** : verrou par profil de clé API (fichier PID),
+  pour l'usage à plusieurs instances de Distillat en parallèle.
 - **`app/i18n.py`** : chargement des traductions, détection langue système,
   changement de langue à chaud.
 - **`app/epub_parser.py`** : extraction texte/TOC/couverture EPUB.
@@ -147,11 +234,11 @@ sauvegarde JSON et/ou export PDF.
   génération par lots + consolidation, gestion des erreurs API, parsing et
   réparation du JSON de sortie, prompts par défaut par langue.
 - **`app/prompts_store.py`** : persistance des prompts personnalisés par
-  langue.
+  profil de clé API puis par langue.
 - **`app/generation_resume.py`** (`ResumeState`) : reprise après échec
   partiel d'une génération par lots.
-- **`app/quota_tracker.py`** (`QuotaTracker`) : suivi local RPM/TPM/RPD,
-  calculé en heure du Pacifique.
+- **`app/quota_tracker.py`** (`QuotaTracker`) : suivi local RPM/TPM/RPD par
+  clé API, calculé en heure du Pacifique.
 - **`app/update_checker.py`** : vérification de nouvelle version au démarrage
   via GitHub Releases.
 - **`app/book_report.py`** (`BookReport`, `Character`) : structure de données

@@ -1,4 +1,5 @@
 """Extraction du texte et de la table des matières d'un fichier EPUB."""
+import zipfile
 from dataclasses import dataclass, field
 
 import ebooklib
@@ -7,6 +8,38 @@ from ebooklib import epub
 
 from app.cover_image import shrink_cover_image
 from app.i18n import tr
+
+# Taille décompressée totale maximale acceptée pour un EPUB (somme des tailles
+# déclarées dans le répertoire central du zip) : très au-dessus de tout livre
+# légitime, même abondamment illustré, mais borne un EPUB piégé ("bombe zip",
+# minuscule sur disque mais gigantesque une fois décompressé) qui épuiserait
+# sinon la mémoire, ebooklib chargeant tout le contenu en mémoire (audit de
+# sécurité du 2026-07-22). Contrôle fiable : zipfile (utilisé par ebooklib)
+# refuse de lire au-delà de la taille déclarée d'une entrée, une archive qui
+# mentirait sur ses tailles ne peut donc pas contourner ce plafond.
+_MAX_UNCOMPRESSED_EPUB_BYTES = 500 * 1024 * 1024
+
+
+def _check_uncompressed_size(file_path: str) -> None:
+    """Pré-contrôle avant de confier le fichier à ebooklib : lit uniquement le
+    répertoire central du zip (aucune décompression, coût quasi nul) et refuse
+    le fichier si le total décompressé déclaré dépasse le plafond. Un fichier
+    illisible ou qui n'est pas un vrai zip est laissé passer tel quel :
+    read_epub() lèvera alors sa propre erreur, comme avant l'ajout de ce
+    contrôle."""
+    try:
+        with zipfile.ZipFile(file_path) as archive:
+            total_bytes = sum(info.file_size for info in archive.infolist())
+    except (OSError, zipfile.BadZipFile):
+        return
+    if total_bytes > _MAX_UNCOMPRESSED_EPUB_BYTES:
+        raise ValueError(
+            tr(
+                "epub_parser.uncompressed_too_large",
+                size_mb=total_bytes // (1024 * 1024),
+                max_mb=_MAX_UNCOMPRESSED_EPUB_BYTES // (1024 * 1024),
+            )
+        )
 
 
 @dataclass
@@ -51,7 +84,9 @@ def _get_author(book: epub.EpubBook) -> str:
 def _find_cover_image_bytes(book: epub.EpubBook) -> bytes | None:
     """Cherche l'image de couverture : d'abord via le type ITEM_COVER, puis via
     la métadonnée <meta name="cover">, puis par convention de nom (fallbacks
-    nécessaires car de nombreux EPUB ne taguent pas proprement leur couverture)."""
+    nécessaires car de nombreux EPUB ne taguent pas proprement leur couverture).
+    Le dernier repli reconnaît aussi "fc"/"front" (front cover), convention
+    rencontrée sur des EPUB qui ne mentionnent jamais le mot "cover"."""
     for item in book.get_items_of_type(ebooklib.ITEM_COVER):
         return item.get_content()
 
@@ -64,6 +99,12 @@ def _find_cover_image_bytes(book: epub.EpubBook) -> bytes | None:
 
     for item in book.get_items_of_type(ebooklib.ITEM_IMAGE):
         if "cover" in item.get_name().lower() or "cover" in (item.get_id() or "").lower():
+            return item.get_content()
+
+    for item in book.get_items_of_type(ebooklib.ITEM_IMAGE):
+        stem = item.get_name().rsplit("/", 1)[-1].lower()
+        item_id = (item.get_id() or "").lower()
+        if stem.startswith("fc") or "front" in stem or "front" in item_id:
             return item.get_content()
 
     return None
@@ -98,6 +139,7 @@ def _build_toc_map(book: epub.EpubBook) -> dict[str, str]:
 def parse_epub(file_path: str) -> BookContent:
     """Parcourt l'EPUB dans l'ordre de lecture (spine) et découpe par chapitre
     en utilisant la table des matières quand elle est disponible."""
+    _check_uncompressed_size(file_path)
     book = epub.read_epub(file_path, options={"ignore_ncx": False})
 
     toc_map = _build_toc_map(book)

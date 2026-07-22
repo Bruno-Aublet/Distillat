@@ -2,8 +2,8 @@
 # Le numéro de version doit rester synchronisé avec app/__version__.py.
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 2, 3, 0),
-    prodvers=(1, 2, 3, 0),
+    filevers=(1, 3, 0, 0),
+    prodvers=(1, 3, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -18,12 +18,12 @@ VSVersionInfo(
         u'040c04b0',
         [StringStruct(u'CompanyName', u'Bruno Aublet'),
         StringStruct(u'FileDescription', u'Distillat - Résumé de livres avec Gemini'),
-        StringStruct(u'FileVersion', u'1.2.3.0'),
+        StringStruct(u'FileVersion', u'1.3.0.0'),
         StringStruct(u'InternalName', u'Distillat'),
         StringStruct(u'LegalCopyright', u'Copyright 2026 Bruno Aublet - Licence GNU GPL v3'),
         StringStruct(u'OriginalFilename', u'Distillat.exe'),
         StringStruct(u'ProductName', u'Distillat'),
-        StringStruct(u'ProductVersion', u'1.2.3.0')])
+        StringStruct(u'ProductVersion', u'1.3.0.0')])
       ]),
     VarFileInfo([VarStruct(u'Translation', [1036, 1200])])
   ]

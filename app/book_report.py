@@ -20,6 +20,16 @@ _RESERVED_WINDOWS_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
 )
 
+# Taille maximale acceptée pour la couverture base64 d'une fiche chargée
+# (environ 15 Mo une fois décodée) : très au-dessus de toute couverture
+# légitime (recompressées à quelques centaines de Ko par shrink_cover_image,
+# quelques Mo au plus pour les fiches antérieures à la réduction automatique),
+# mais borne le décodage en mémoire d'un fichier .distillat.json piégé ou
+# corrompu portant un blob démesuré. Au-delà, la couverture est ignorée et la
+# fiche se charge sans elle : même philosophie que shrink_cover_image(), une
+# couverture inutilisable ne doit jamais faire échouer le chargement.
+_MAX_COVER_B64_LENGTH = 20_000_000
+
 
 def sanitize_filename(base: str, fallback: str | None = None) -> str:
     """Retire d'une chaîne les caractères interdits dans un nom de fichier
@@ -80,6 +90,8 @@ class BookReport:
     def from_json(raw: str) -> "BookReport":
         data = json.loads(raw)
         cover_b64 = data.get("cover_image_base64")
+        if isinstance(cover_b64, str) and len(cover_b64) > _MAX_COVER_B64_LENGTH:
+            cover_b64 = None
         cover_image = base64.b64decode(cover_b64) if cover_b64 else None
         if cover_image:
             # Remet aux normes actuelles une couverture provenant d'une fiche

@@ -14,11 +14,16 @@ prêts à consulter ou à exporter en PDF.
 
 L'application s'appuie sur le palier gratuit de Gemini 3.5 Flash.
 
+**Confidentialité** : le texte du livre est envoyé à l'API Gemini pour générer
+la fiche, et Google peut utiliser les contenus soumis via le palier gratuit
+pour améliorer ses services - évitez d'y soumettre des documents sensibles ou
+confidentiels.
+
 **Téléchargement** : dernière version sur la page
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.2.3**
+**Version 1.3.0**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
@@ -78,7 +83,11 @@ ou en ligne : ne le trouverez pas, il n'a jamais existé.
      même limite de débit, pour limiter le nombre de requêtes), chaque lot
      est résumé en un appel, puis un dernier appel reçoit l'ensemble de ces
      résumés et produit en une seule fois les deux résumés finaux, les
-     personnages principaux et l'analyse littéraire. Si un échec survient en
+     personnages principaux et l'analyse littéraire. Si ce découpage ne
+     produit qu'un seul lot (livre tout juste au-dessus de la limite), les
+     deux résumés, les personnages et l'analyse sont produits directement en
+     un seul appel à partir de ce lot, sans appel intermédiaire par lot ni
+     appel de fusion séparé. Si un échec survient en
      cours de route (quota atteint, réponse Gemini illisible...), les lots
      déjà résumés avec succès sont conservés : redéposer le même fichier et
      cliquer de nouveau sur **Résumer** reprend directement exactement là où
@@ -91,7 +100,8 @@ ou en ligne : ne le trouverez pas, il n'a jamais existé.
      Le bouton **Supprimer** de cette fenêtre efface l'état de reprise d'un
      livre (pour repartir de zéro à la place) ; le fichier correspondant est
      envoyé à la corbeille Windows plutôt que supprimé sans recours.
-4. Le résultat (toujours dans la langue actuellement choisie pour
+4. Un petit son discret est joué dès que la fiche s'affiche avec succès. Le
+   résultat (toujours dans la langue actuellement choisie pour
    l'interface, quelle que soit la langue du livre - voir
    [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches))
    s'affiche dans 5 onglets : **Couverture** (image, titre, auteur),
@@ -100,7 +110,7 @@ ou en ligne : ne le trouverez pas, il n'a jamais existé.
    un roman long), **Personnages** (fiches des personnages principaux et des
    groupes ou organisations centraux à l'intrigue - faction, conseil, armée...
    - typiquement 3 à 20 entrées selon la richesse du roman) et **Analyse**
-   littéraire (au moins 600 à 900 mots, structurée par thème, style et
+   littéraire (au moins 2500 à 4000 mots, structurée par thème, style et
    portée de l'œuvre).
    Ces cibles sont indiquées à Gemini, pas des garanties strictes. Les titres
    de section que Gemini structure en Markdown (`#`, `##`, `###`...) sont
@@ -110,7 +120,10 @@ ou en ligne : ne le trouverez pas, il n'a jamais existé.
    chaque personnage, et titre du livre comme nom de l'auteur sur l'onglet
    Couverture). Toute édition est reprise automatiquement lors d'une
    sauvegarde (fiche `.distillat.json` ou export `.pdf`), balises de titre
-   comprises.
+   comprises. Un clic droit sur l'image de l'onglet Couverture (qu'une
+   couverture ait été trouvée automatiquement ou non) permet de choisir
+   manuellement une image sur le disque pour la définir ou la remplacer, sans
+   avoir à régénérer la fiche.
 5. Cliquez sur **Sauvegarder en .pdf** pour exporter l'ensemble en document
    PDF mis en forme, ou sur **Sauvegarder la fiche…** pour l'enregistrer sous
    forme de fichier JSON autonome (`.distillat.json`) rechargeable plus tard
@@ -124,7 +137,20 @@ ou en ligne : ne le trouverez pas, il n'a jamais existé.
 
 La clé API Gemini est demandée au premier lancement et stockée de façon
 chiffrée via le Gestionnaire d'identification Windows (voir
-[Sécurité de la clé API](#sécurité-de-la-clé-api)).
+[Sécurité de la clé API](#sécurité-de-la-clé-api)). Plusieurs profils de clé
+API (un nom + une clé chacun) peuvent être enregistrés via le bouton
+**Profils**, pour lancer plusieurs instances de Distillat en parallèle sur
+des comptes différents : chaque instance se voit attribuer automatiquement,
+à son démarrage, le premier profil non déjà utilisé par une autre instance
+ouverte sur le même ordinateur, sans manipulation manuelle. Deux profils ne
+peuvent pas partager le même nom ni la même clé API ; un profil actif dans
+une instance ne peut pas être modifié ou supprimé depuis une autre instance,
+ni pendant qu'une génération est en cours avec lui. Les prompts personnalisés
+et les limites de quota RPM/TPM/RPD personnalisées (voir plus bas) sont
+propres à chaque profil. Un bouton dédié, à droite du titre en haut de la
+fenêtre, permet d'ouvrir directement une nouvelle instance de Distillat sans
+avoir à relancer l'exécutable ou le script manuellement (4 instances
+simultanées maximum sur le même ordinateur).
 
 Le bouton **Prompts** ouvre une fenêtre permettant de consulter et, si
 souhaité, de modifier les prompts envoyés à Gemini (un par cas de figure
@@ -194,8 +220,8 @@ Ce suivi est **local à l'application** : il ne reflète pas l'usage
 réel si la même clé API est utilisée ailleurs en parallèle (un autre outil,
 un test manuel via AI Studio...), auquel cas les compteurs affichés ne
 seront plus fiables. Il est en revanche propre à chaque clé API : passer
-d'une clé à une autre (bouton **Clé API**) affiche aussitôt le compteur de
-cette clé, sans jamais le mélanger avec celui d'une autre.
+d'un profil à un autre (bouton **Profils**) affiche aussitôt le compteur de
+la clé de ce profil, sans jamais le mélanger avec celui d'un autre.
 
 Une explication simplifiée de ce fonctionnement, sans jargon technique, est
 également accessible directement dans l'application via le bouton **?** situé
@@ -254,12 +280,15 @@ lors d'une mise à jour) :
 
 - **Clé API** : Gestionnaire d'identification Windows (voir
   [Sécurité de la clé API](#sécurité-de-la-clé-api)).
-- **`.quota_state_<hash>.json`** (compteur de requêtes du jour, un fichier par clé API pour ne jamais mélanger deux comptes), **`quota_limits.json`**
-  (limites RPM/TPM/RPD personnalisées, si modifiées via le bouton **Limites de
-  quota**), **`settings.json`** (regroupe la langue de l'interface choisie, voir
+- **`.quota_state_<hash>.json`** et **`quota_limits_<hash>.json`** (compteur
+  de requêtes du jour, et limites RPM/TPM/RPD personnalisées si modifiées via
+  le bouton **Limites de quota**, un fichier de chaque par clé API pour ne
+  jamais mélanger deux comptes), **`settings.json`** (regroupe la langue de
+  l'interface choisie, voir
   [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches) ;
-  les prompts personnalisés par langue, si modifiés via le bouton **Prompts** ;
-  et les derniers dossiers utilisés pour une fiche et pour un export PDF, voir
+  la liste des profils de clé API ; les prompts personnalisés par profil puis
+  par langue, si modifiés via le bouton **Prompts** ; et les derniers dossiers
+  utilisés pour une fiche et pour un export PDF, voir
   ci-dessous), **`.generation_resume_<hash>.json`** (un fichier par livre,
   lots de chapitres déjà résumés pour une génération interrompue par un
   échec ; absent en l'absence d'échec, supprimé dès que la génération de ce
@@ -287,9 +316,13 @@ lors d'une mise à jour) :
   stockée dans la fiche ou le document PDF, pour éviter qu'une image haute
   résolution alourdisse inutilement le fichier ; une fiche existante
   contenant encore une couverture surdimensionnée (créée par une version
-  antérieure) est allégée automatiquement dès son prochain chargement.
+  antérieure) est allégée automatiquement dès son prochain chargement. Le
+  sélecteur de fichier ouvert en cliquant sur la zone de dépôt, ainsi que
+  celui utilisé pour choisir manuellement une couverture, proposent chacun de
+  la même façon leur propre dernier dossier utilisé.
 - **`LICENSE`**, **`CHANGELOG.md`**, **icône de l'application**
-  (`icons/open-book_4681875.png`) et **fichiers de traduction**
+  (`icons/open-book_4681875.png`), **son de fin de génération**
+  (`assets/success.wav`) et **fichiers de traduction**
   (`locales/fr.json`, `locales/en.json`) : embarqués à la compilation (dans
   `_internal/`). Le `LICENSE` et le `CHANGELOG.md` sont accessibles depuis le
   footer de l'application (« Copyright ... - Licence GNU GPL v3 » à gauche ;
@@ -334,11 +367,15 @@ analysis of the work, ready to view or export to PDF.
 
 The application relies on Gemini 3.5 Flash's free tier.
 
+**Privacy**: the book's text is sent to the Gemini API to generate the
+report, and Google may use content submitted through the free tier to improve
+its services - avoid submitting sensitive or confidential documents.
+
 **Download**: latest version on the
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
 `.zip` file to download is at the bottom of the release page).
 
-**Version 1.2.3**
+**Version 1.3.0**
 
 Windows application with a PyQt5 interface to generate a complete reading
 report (summaries, characters, analysis) from an EPUB or PDF book, via the
@@ -406,7 +443,8 @@ online: you won't find it, it never existed.
      can remain waiting to be resumed this way; on startup, if that is the
      case, a window lists all of them and lets you resume one directly,
      without having to find and drop the file again yourself.
-4. The result (always in the language currently chosen for the interface,
+4. A short, discreet sound plays as soon as the report is displayed
+   successfully. The result (always in the language currently chosen for the interface,
    regardless of the book's language - see
    [Interface and report language](#interface-and-report-language)) is
    displayed in 5 tabs: **Cover** (image, title, author), **Short
@@ -415,7 +453,7 @@ online: you won't find it, it never existed.
    a long novel), **Characters** (sheets for the main characters and for
    groups or organizations central to the plot - faction, council, army...
    - typically 3 to 20 entries depending on how rich the novel is), and
-   **Literary analysis** (at least 600 to 900 words, structured by theme,
+   **Literary analysis** (at least 2500 to 4000 words, structured by theme,
    style, and the work's significance).
    These are targets given to Gemini, not strict guarantees. Section
    headings that Gemini structures in Markdown (`#`, `##`, `###`...) are
@@ -424,7 +462,10 @@ online: you won't find it, it never existed.
    the keyboard (summaries, analysis, name and description of each
    character, and the book's title as well as the author's name on the
    Cover tab). Any edit is automatically picked up when saving (`.distillat.json`
-   report or `.pdf` export), heading tags included.
+   report or `.pdf` export), heading tags included. Right-clicking the image
+   on the Cover tab (whether a cover was found automatically or not) lets you
+   manually pick an image from disk to set or replace the cover, without
+   having to regenerate the report.
 5. Click **Export to .pdf** to export everything as a formatted PDF
    document, or **Save the report…** to save it as a standalone JSON file
    (`.distillat.json`) reloadable later via **Load a report…** (see
@@ -437,7 +478,19 @@ online: you won't find it, it never existed.
 
 The Gemini API key is requested on first launch and stored encrypted via the
 Windows Credential Manager (see
-[API key security](#api-key-security)).
+[API key security](#api-key-security)). Several API key profiles (a name
+plus a key each) can be registered via the **Profiles** button, to run
+several Distillat instances in parallel with different accounts: each
+instance is automatically assigned, on startup, the first profile not
+already in use by another instance open on the same computer, with no
+manual step required. Two profiles cannot share the same name or the same
+API key; a profile active in one instance cannot be edited or deleted from
+another instance, nor while a generation is running with it. Custom prompts
+and custom RPM/TPM/RPD quota limits (see below) are specific to each
+profile. A dedicated button, to the right of the title at the top of the
+window, opens a new Distillat instance directly, without having to relaunch
+the executable or the script manually (up to 4 simultaneous instances on
+the same computer).
 
 The **Prompts** button opens a window to view and, if desired, edit the
 prompts sent to Gemini (one per case described above), each independently
@@ -502,8 +555,8 @@ sent. This tracking is **local to the application**: it does not reflect
 actual usage if the same API key is used elsewhere in parallel (another
 tool, a manual test via AI Studio...), in which case the displayed counters
 will no longer be accurate. It is however specific to each API key:
-switching from one key to another (**API key** button) immediately shows
-that key's own counter, never mixed with another one's.
+switching from one profile to another (**Profiles** button) immediately
+shows that profile's own key counter, never mixed with another one's.
 
 A simplified, jargon-free explanation of how this works is also available
 directly in the application via the **?** button next to the generation
@@ -561,11 +614,14 @@ update):
 
 - **API key**: Windows Credential Manager (see
   [API key security](#api-key-security)).
-- **`.quota_state_<hash>.json`** (today's request counter, one file per API key so two accounts are never mixed), **`quota_limits.json`**
-  (custom RPM/TPM/RPD limits, if changed via the **Quota limits** button),
-  **`settings.json`** (groups together the chosen interface language, see
-  [Interface and report language](#interface-and-report-language); custom
-  prompts per language, if changed via the **Prompts** button; and the last
+- **`.quota_state_<hash>.json`** and **`quota_limits_<hash>.json`** (today's
+  request counter, and custom RPM/TPM/RPD limits if changed via the
+  **Quota limits** button, one file of each per API key so two accounts are
+  never mixed), **`settings.json`** (groups together the chosen interface
+  language, see
+  [Interface and report language](#interface-and-report-language); the list
+  of API key profiles; custom prompts per profile then per language, if
+  changed via the **Prompts** button; and the last
   folders used for a report and for a PDF export, see below),
   **`.generation_resume_<hash>.json`** (one file per book, chapter batches
   already summarized for a generation interrupted by a failure; absent if
@@ -592,9 +648,12 @@ update):
   stored in the report or the PDF document, to avoid a high-resolution image
   needlessly bloating the file; an existing report still containing an
   oversized cover (created by an earlier version) is lightened automatically
-  the next time it is loaded.
+  the next time it is loaded. The file picker opened by clicking the drop
+  zone, as well as the one used to manually pick a cover, each likewise offer
+  their own last used folder.
 - **`LICENSE`**, **`CHANGELOG.md`**, **application icon**
-  (`icons/open-book_4681875.png`), and **translation files**
+  (`icons/open-book_4681875.png`), **end-of-generation sound**
+  (`assets/success.wav`), and **translation files**
   (`locales/fr.json`, `locales/en.json`): bundled at compile time (in
   `_internal/`). The `LICENSE` and `CHANGELOG.md` are accessible from the
   application's footer ("Copyright ... - GNU GPL v3 license" on the left;

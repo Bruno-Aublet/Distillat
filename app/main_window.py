@@ -3,7 +3,11 @@ import hashlib
 import os
 import platform
 import re
+import subprocess
+import sys
+import uuid
 import webbrowser
+import winsound
 from pathlib import Path
 
 from PyQt5.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt, QTimer
@@ -28,9 +32,11 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QAction,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -41,14 +47,15 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from app import config, generation_resume, i18n
+from app import config, generation_resume, i18n, instance_lock
 from app.__version__ import VERSION
 from app.i18n import tr
 from app.update_checker import check_for_updates_on_startup, releases_page_url, repo_page_url
 from app.book_report import BookReport, Character, sanitize_filename
+from app.cover_image import shrink_cover_image
 from app.gemini_client import MODEL_NAME, default_prompt_templates, log_api_event
 from app.pdf_export import export_book_report_to_pdf
-from app.prompts_store import load_custom_prompts, save_custom_prompts
+from app.prompts_store import load_custom_prompts, reset_custom_prompt, save_custom_prompts
 from app.quota_tracker import QuotaSnapshot, QuotaTracker, save_quota_limits
 from app.worker import SummarizeWorker
 
@@ -216,37 +223,18 @@ def _draw_eye_icon(color: str, slashed: bool) -> QIcon:
     return QIcon(pixmap)
 
 
-class ApiKeyDialog(QDialog):
-    """Boîte de dialogue de saisie de la clé API Gemini, stockée de façon
-    chiffrée via le Gestionnaire d'identification Windows (keyring)."""
+class _ApiKeyInputRow:
+    """Champ de saisie de clé API avec bouton oeil (dé/masquer), factorisé
+    entre ProfileEditDialog (seul appelant désormais) : un seul endroit à
+    faire évoluer si ce composant change."""
 
-    def __init__(self, parent=None, current_api_key: str | None = None):
-        super().__init__(parent)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self.setWindowTitle(tr("api_key_dialog.window_title"))
-        self.setMinimumWidth(420)
-
-        layout = QVBoxLayout(self)
-
-        info = QLabel(tr("api_key_dialog.info"))
-        info.setWordWrap(True)
-        info.setOpenExternalLinks(True)
-        info.setAlignment(Qt.AlignCenter)
-        layout.addWidget(info)
-
-        warning = QLabel(tr("api_key_dialog.warning"))
-        warning.setWordWrap(True)
-        warning.setStyleSheet("color: #b02a2a; font-weight: bold;")
-        warning.setAlignment(Qt.AlignCenter)
-        layout.addWidget(warning)
-
-        form = QFormLayout()
+    def __init__(self, layout: QFormLayout, label: str, placeholder: str, initial_value: str = "") -> None:
         key_row = QHBoxLayout()
         self.key_input = QLineEdit()
         self.key_input.setEchoMode(QLineEdit.Password)
-        self.key_input.setPlaceholderText(tr("api_key_dialog.key_placeholder"))
-        if current_api_key:
-            self.key_input.setText(current_api_key)
+        self.key_input.setPlaceholderText(placeholder)
+        if initial_value:
+            self.key_input.setText(initial_value)
         key_row.addWidget(self.key_input)
 
         self.toggle_visibility_button = QPushButton()
@@ -276,20 +264,379 @@ class ApiKeyDialog(QDialog):
         self.toggle_visibility_button.toggled.connect(self._on_toggle_visibility)
         key_row.addWidget(self.toggle_visibility_button)
 
-        form.addRow(tr("api_key_dialog.key_label"), key_row)
-        layout.addLayout(form)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        layout.addRow(label, key_row)
 
     def _on_toggle_visibility(self, checked: bool) -> None:
         self.key_input.setEchoMode(QLineEdit.Normal if checked else QLineEdit.Password)
         self.toggle_visibility_button.setIcon(_draw_eye_icon("#2a5fa0" if checked else "#555555", slashed=checked))
 
-    def api_key(self) -> str:
+    def value(self) -> str:
         return self.key_input.text().strip()
+
+
+class ProfileEditDialog(QDialog):
+    """Boîte de dialogue d'ajout ou de modification d'un profil de clé API
+    Gemini (nom + clé), la clé restant stockée de façon chiffrée via le
+    Gestionnaire d'identification Windows (keyring, voir app.config)."""
+
+    def __init__(self, parent=None, current_name: str = "", current_api_key: str | None = None):
+        super().__init__(parent)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowTitle(tr("profiles_dialog.edit_window_title"))
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+
+        info = QLabel(tr("profiles_dialog.info"))
+        info.setWordWrap(True)
+        info.setOpenExternalLinks(True)
+        info.setAlignment(Qt.AlignCenter)
+        layout.addWidget(info)
+
+        account_warning = QLabel(tr("profiles_dialog.account_warning"))
+        account_warning.setWordWrap(True)
+        account_warning.setAlignment(Qt.AlignCenter)
+        layout.addWidget(account_warning)
+
+        warning = QLabel(tr("profiles_dialog.warning"))
+        warning.setWordWrap(True)
+        warning.setStyleSheet("color: #b02a2a; font-weight: bold;")
+        warning.setAlignment(Qt.AlignCenter)
+        layout.addWidget(warning)
+
+        form = QFormLayout()
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText(tr("profiles_dialog.name_placeholder"))
+        if current_name:
+            self.name_input.setText(current_name)
+        form.addRow(tr("profiles_dialog.name_label"), self.name_input)
+
+        self._key_row = _ApiKeyInputRow(
+            form,
+            tr("profiles_dialog.key_label"),
+            tr("profiles_dialog.key_placeholder"),
+            current_api_key or "",
+        )
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox()
+        buttons.addButton(tr("profiles_dialog.save_button"), QDialogButtonBox.AcceptRole)
+        buttons.addButton(tr("profiles_dialog.cancel_button"), QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def profile_name(self) -> str:
+        return self.name_input.text().strip()
+
+    def api_key(self) -> str:
+        return self._key_row.value()
+
+
+class _DeselectableListWidget(QListWidget):
+    """QListWidget dont un clic dans une zone vide (hors de tout item)
+    désélectionne l'item courant, plutôt que de laisser la sélection
+    précédente active sans retour visuel de survol (comportement Qt par
+    défaut, jugé peu clair dans ProfilesDialog)."""
+
+    def mousePressEvent(self, event) -> None:
+        if self.itemAt(event.pos()) is None:
+            self.clearSelection()
+            self.setCurrentRow(-1)
+        super().mousePressEvent(event)
+
+
+class ProfilesDialog(QDialog):
+    """Gestion des profils de clé API Gemini (ajout, renommage, modification
+    de la clé, suppression) et sélection du profil actif pour l'instance
+    courante de l'application. Remplace l'ancien dialogue à clé unique
+    (ApiKeyDialog) depuis l'introduction du support multi-instances (une clé
+    différente par instance, voir app.config et app.instance_lock).
+
+    active_profile (attribut public, relu par l'appelant après exec_()) est
+    initialisé au profil actuellement actif de l'instance, et mis à jour si
+    l'utilisateur en sélectionne un autre via le bouton "Utiliser" - jamais
+    modifié par un simple Ajouter/Renommer/Supprimer d'un profil différent."""
+
+    def __init__(
+        self,
+        parent=None,
+        quota_tracker: QuotaTracker | None = None,
+        active_profile: dict | None = None,
+        generation_in_progress: bool = False,
+    ):
+        super().__init__(parent)
+        self._quota_tracker = quota_tracker
+        self.active_profile = active_profile
+        self._generation_in_progress = generation_in_progress
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowTitle(tr("profiles_dialog.window_title"))
+        self.setMinimumWidth(460)
+        self.setMinimumHeight(360)
+
+        layout = QVBoxLayout(self)
+
+        info = QLabel(tr("profiles_dialog.list_info"))
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self.list_widget = _DeselectableListWidget()
+        self.list_widget.itemSelectionChanged.connect(self._on_selection_changed)
+        layout.addWidget(self.list_widget)
+
+        buttons_row = QHBoxLayout()
+        self.use_button = QPushButton(tr("profiles_dialog.use_button"))
+        self.use_button.clicked.connect(self._on_use_clicked)
+        buttons_row.addWidget(self.use_button)
+        self.add_button = QPushButton(tr("profiles_dialog.add_button"))
+        self.add_button.clicked.connect(self._on_add_clicked)
+        buttons_row.addWidget(self.add_button)
+        self.edit_button = QPushButton(tr("profiles_dialog.edit_button"))
+        self.edit_button.clicked.connect(self._on_edit_clicked)
+        buttons_row.addWidget(self.edit_button)
+        self.delete_button = QPushButton(tr("profiles_dialog.delete_button"))
+        self.delete_button.clicked.connect(self._on_delete_clicked)
+        buttons_row.addWidget(self.delete_button)
+        layout.addLayout(buttons_row)
+
+        close_buttons = QDialogButtonBox()
+        close_buttons.addButton(tr("profiles_dialog.close_button"), QDialogButtonBox.AcceptRole)
+        close_buttons.accepted.connect(self.accept)
+        layout.addWidget(close_buttons)
+
+        self._reload_list()
+
+    def _reload_list(self) -> None:
+        self.list_widget.clear()
+        for profile in config.list_profiles():
+            label = profile["name"]
+            if self.active_profile is not None and profile["id"] == self.active_profile["id"]:
+                label += tr("profiles_dialog.active_suffix")
+            elif instance_lock.is_profile_locked_elsewhere(profile["id"]):
+                label += tr("profiles_dialog.locked_suffix")
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, profile)
+            self.list_widget.addItem(item)
+        # QListWidget sélectionne automatiquement la première ligne dès
+        # qu'un item y est ajouté : sans ce clearSelection(), les boutons
+        # Utiliser/Modifier/Supprimer restaient actifs et agissaient sur le
+        # premier profil de la liste même sans clic explicite de
+        # l'utilisateur (bug signalé le 2026-07-22). setCurrentRow(-1) seul
+        # ne suffit pas : currentItem() continue de renvoyer le premier item
+        # tant que clearSelection() n'a pas aussi vidé la sélection.
+        self.list_widget.clearSelection()
+        self.list_widget.setCurrentRow(-1)
+        self._on_selection_changed()
+
+    def _current_profile(self) -> dict | None:
+        items = self.list_widget.selectedItems()
+        return items[0].data(Qt.UserRole) if items else None
+
+    def _on_selection_changed(self, *_args) -> None:
+        has_selection = self._current_profile() is not None
+        self.use_button.setEnabled(has_selection)
+        self.edit_button.setEnabled(has_selection)
+        self.delete_button.setEnabled(has_selection)
+
+    def _on_add_clicked(self) -> None:
+        dialog = ProfileEditDialog(self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        name = dialog.profile_name()
+        api_key = dialog.api_key()
+        if not name or not api_key:
+            QMessageBox.warning(
+                self, tr("profiles_dialog.missing_fields_title"), tr("profiles_dialog.missing_fields_message")
+            )
+            return
+        if config.find_profile_by_name(name) is not None:
+            QMessageBox.warning(
+                self, tr("profiles_dialog.duplicate_name_title"), tr("profiles_dialog.duplicate_name_message", name=name)
+            )
+            return
+        duplicate = config.find_profile_by_api_key(api_key)
+        if duplicate is not None:
+            QMessageBox.warning(
+                self,
+                tr("profiles_dialog.duplicate_key_title"),
+                tr("profiles_dialog.duplicate_key_message", name=duplicate["name"]),
+            )
+            return
+        profile_id = str(uuid.uuid4())
+        if not config.save_profile_api_key(profile_id, api_key):
+            QMessageBox.critical(
+                self, tr("profiles_dialog.save_error_title"), tr("profiles_dialog.save_error_message")
+            )
+            return
+        # config.add_profile() relit et réécrit la liste sous le verrou
+        # inter-processus de settings.json : un list_profiles() suivi d'un
+        # save_profiles() ici perdait le profil ajouté au même moment par une
+        # autre instance (course fermée le 2026-07-22).
+        config.add_profile({"id": profile_id, "name": name})
+        self._reload_list()
+
+    def _on_edit_clicked(self) -> None:
+        profile = self._current_profile()
+        if profile is None:
+            return
+        is_active_here = self.active_profile is not None and self.active_profile["id"] == profile["id"]
+        if is_active_here and self._generation_in_progress:
+            QMessageBox.warning(
+                self,
+                tr("profiles_dialog.in_use_title"),
+                tr("profiles_dialog.in_use_generation_message", name=profile["name"]),
+            )
+            return
+        if not is_active_here and not instance_lock.acquire_profile_lock(profile["id"]):
+            QMessageBox.warning(
+                self,
+                tr("profiles_dialog.in_use_title"),
+                tr("profiles_dialog.locked_message", name=profile["name"]),
+            )
+            return
+        # Le verrou pris ci-dessus (profil non actif dans cette fenêtre) est
+        # conservé pendant toute la durée du sous-dialogue d'édition, puis
+        # relâché dans le finally : le relâcher aussitôt (comme avant le
+        # 2026-07-22) rouvrait une fenêtre de course à échelle humaine - une
+        # autre instance pouvait s'attribuer ce profil pendant que
+        # l'utilisateur éditait, et la validation écrasait alors la clé d'un
+        # profil devenu actif ailleurs.
+        try:
+            current_api_key = config.load_profile_api_key(profile["id"])
+            dialog = ProfileEditDialog(self, current_name=profile["name"], current_api_key=current_api_key)
+            if dialog.exec_() != QDialog.Accepted:
+                return
+            name = dialog.profile_name()
+            api_key = dialog.api_key()
+            if not name or not api_key:
+                QMessageBox.warning(
+                    self, tr("profiles_dialog.missing_fields_title"), tr("profiles_dialog.missing_fields_message")
+                )
+                return
+            if config.find_profile_by_name(name, exclude_profile_id=profile["id"]) is not None:
+                QMessageBox.warning(
+                    self, tr("profiles_dialog.duplicate_name_title"), tr("profiles_dialog.duplicate_name_message", name=name)
+                )
+                return
+            duplicate = config.find_profile_by_api_key(api_key, exclude_profile_id=profile["id"])
+            if duplicate is not None:
+                QMessageBox.warning(
+                    self,
+                    tr("profiles_dialog.duplicate_key_title"),
+                    tr("profiles_dialog.duplicate_key_message", name=duplicate["name"]),
+                )
+                return
+            if not config.save_profile_api_key(profile["id"], api_key):
+                QMessageBox.critical(
+                    self, tr("profiles_dialog.save_error_title"), tr("profiles_dialog.save_error_message")
+                )
+                return
+            # config.rename_profile() relit et réécrit la liste sous le verrou
+            # inter-processus de settings.json (voir _on_add_clicked()).
+            config.rename_profile(profile["id"], name)
+            if self.active_profile is not None and self.active_profile["id"] == profile["id"]:
+                self.active_profile = {"id": profile["id"], "name": name}
+                if self._quota_tracker is not None:
+                    self._quota_tracker.switch_api_key(api_key)
+        finally:
+            if not is_active_here:
+                instance_lock.release_profile_lock(profile["id"])
+        self._reload_list()
+
+    def _on_delete_clicked(self) -> None:
+        profile = self._current_profile()
+        if profile is None:
+            return
+        is_active_here = self.active_profile is not None and self.active_profile["id"] == profile["id"]
+        if is_active_here and self._generation_in_progress:
+            QMessageBox.warning(
+                self,
+                tr("profiles_dialog.in_use_title"),
+                tr("profiles_dialog.in_use_generation_message", name=profile["name"]),
+            )
+            return
+        if not is_active_here and not instance_lock.acquire_profile_lock(profile["id"]):
+            QMessageBox.warning(
+                self,
+                tr("profiles_dialog.in_use_title"),
+                tr("profiles_dialog.locked_message", name=profile["name"]),
+            )
+            return
+        # Le verrou pris ci-dessus (profil non actif dans cette fenêtre) est
+        # conservé pendant toute la durée de la confirmation, puis relâché
+        # dans le finally : le relâcher aussitôt (comme avant le 2026-07-22)
+        # laissait une autre instance s'attribuer ce profil pendant que la
+        # confirmation restait ouverte, et le clic sur "Supprimer" effaçait
+        # alors la clé keyring d'un profil activement utilisé ailleurs. Après
+        # une suppression effective, ce release retire aussi le fichier de
+        # verrou du profil disparu, qui ne serait sinon nettoyé par personne.
+        try:
+            confirm = QMessageBox(self)
+            confirm.setWindowTitle(tr("profiles_dialog.delete_confirm_title"))
+            confirm.setText(tr("profiles_dialog.delete_confirm_message", name=profile["name"]))
+            yes_button = confirm.addButton(tr("profiles_dialog.delete_confirm_yes"), QMessageBox.YesRole)
+            confirm.addButton(tr("profiles_dialog.delete_confirm_no"), QMessageBox.NoRole)
+            confirm.exec_()
+            if confirm.clickedButton() is not yes_button:
+                return
+            if self.active_profile is not None and self.active_profile["id"] == profile["id"]:
+                instance_lock.release_profile_lock(profile["id"])
+                self.active_profile = None
+            config.delete_profile_api_key(profile["id"])
+            # config.remove_profile() relit et réécrit la liste sous le verrou
+            # inter-processus de settings.json (voir _on_add_clicked()).
+            config.remove_profile(profile["id"])
+        finally:
+            if not is_active_here:
+                instance_lock.release_profile_lock(profile["id"])
+        self._reload_list()
+
+    def _on_use_clicked(self) -> None:
+        profile = self._current_profile()
+        if profile is None:
+            return
+        if self.active_profile is not None and self.active_profile["id"] == profile["id"]:
+            return
+        # Changer de profil actif pendant une génération est refusé (ajouté
+        # le 2026-07-22, même garde-fou que Modifier/Supprimer). Protection
+        # locale à CETTE instance uniquement (generation_in_progress vient de
+        # self.worker.isRunning() de cette fenêtre, voir _prompt_for_api_key)
+        # : le switch_api_key() ci-dessous rebasculerait aussitôt le suivi de
+        # quota sur le fichier de la nouvelle clé alors que le worker de
+        # cette même fenêtre continue d'enregistrer les requêtes de la
+        # génération en cours (lancée avec l'ancienne clé), créditant le
+        # mauvais compte ; et le verrou de l'ancien profil serait libéré
+        # alors que sa clé est encore activement utilisée par CETTE
+        # instance, permettant à une autre instance de prendre ce profil et
+        # d'utiliser la même clé en parallèle de la génération en cours.
+        if self._generation_in_progress:
+            QMessageBox.warning(
+                self,
+                tr("profiles_dialog.in_use_title"),
+                tr("profiles_dialog.switch_during_generation_message"),
+            )
+            return
+        if not instance_lock.acquire_profile_lock(profile["id"]):
+            QMessageBox.warning(
+                self, tr("profiles_dialog.locked_title"), tr("profiles_dialog.locked_message", name=profile["name"])
+            )
+            return
+        if self.active_profile is not None:
+            instance_lock.release_profile_lock(self.active_profile["id"])
+        self.active_profile = profile
+        api_key = config.load_profile_api_key(profile["id"])
+        # Si la clé n'est pas lisible ici (Gestionnaire d'identification
+        # Windows indisponible), active_profile est quand même mis à jour
+        # ci-dessus (l'utilisateur a bien choisi ce profil), mais
+        # quota_tracker doit rester sur son état actuel plutôt que de rester
+        # signalé comme bascule effectuée sans que le suivi de quota affiché
+        # ne corresponde réellement au nouveau profil actif (audit du
+        # 2026-07-22) : à défaut de pouvoir basculer proprement, mieux vaut
+        # ne pas basculer du tout que de laisser l'affichage désynchronisé
+        # entre le nom de profil affiché et le compteur de quota affiché.
+        if api_key and self._quota_tracker is not None:
+            self._quota_tracker.switch_api_key(api_key)
+        self._reload_list()
 
 
 class QuotaLimitsDialog(QDialog):
@@ -338,7 +685,9 @@ class QuotaLimitsDialog(QDialog):
 
         layout.addLayout(form)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox()
+        buttons.addButton(tr("quota_limits_dialog.ok_button"), QDialogButtonBox.AcceptRole)
+        buttons.addButton(tr("quota_limits_dialog.cancel_button"), QDialogButtonBox.RejectRole)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -357,10 +706,17 @@ def _prompt_tabs() -> tuple[tuple[str, str, str], ...]:
 class PromptsDialog(QDialog):
     """Fenêtre permettant de consulter et modifier les prompts envoyés à
     Gemini. Chaque prompt a sa propre zone de saisie et son propre bouton de
-    réinitialisation (n'affecte que cette zone)."""
+    réinitialisation (n'affecte que cette zone). Le bouton de sauvegarde est
+    inactif tant qu'aucun texte n'a été modifié par rapport à l'état initial
+    (personnalisé ou par défaut) de la fenêtre, pour ne jamais graver de
+    personnalisation identique au prompt par défaut du moment - voir
+    prompts_store.save_custom_prompts. De même, le bouton de réinitialisation
+    de chaque onglet est inactif tant que son texte affiché est déjà celui
+    par défaut."""
 
-    def __init__(self, parent=None, current_prompts: dict[str, str] | None = None):
+    def __init__(self, parent=None, current_prompts: dict[str, str] | None = None, profile_id: str | None = None):
         super().__init__(parent)
+        self._profile_id = profile_id
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setWindowTitle(tr("prompts_dialog.window_title"))
         self.resize(750, 600)
@@ -377,13 +733,21 @@ class PromptsDialog(QDialog):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, stretch=1)
 
-        self._text_edits: dict[str, QTextEdit] = {}
-        for key, tab_title, tab_explanation in _prompt_tabs():
-            self._text_edits[key] = self._build_tab(key, tab_title, tab_explanation, current_prompts.get(key, ""))
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox()
+        self._save_button = buttons.addButton(tr("prompts_dialog.save_button"), QDialogButtonBox.AcceptRole)
+        self._save_button.setEnabled(False)
+        buttons.addButton(tr("prompts_dialog.cancel_button"), QDialogButtonBox.RejectRole)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+
+        self._text_edits: dict[str, QTextEdit] = {}
+        self._initial_texts: dict[str, str] = {}
+        self._reset_buttons: dict[str, QPushButton] = {}
+        for key, tab_title, tab_explanation in _prompt_tabs():
+            initial_text = current_prompts.get(key, "") or default_prompt_templates()[key]
+            self._initial_texts[key] = initial_text
+            self._build_tab(key, tab_title, tab_explanation, initial_text)
+
         layout.addWidget(buttons)
 
     def _build_tab(self, key: str, tab_title: str, tab_explanation: str, initial_text: str) -> QTextEdit:
@@ -425,17 +789,39 @@ class PromptsDialog(QDialog):
             text_edit.update()
 
         tab_layout.addWidget(text_edit)
-        _set_prompt_text(initial_text or default_prompt_templates()[key])
+        _set_prompt_text(initial_text)
 
         reset_row = QHBoxLayout()
         reset_row.addStretch()
         reset_button = QPushButton(tr("prompts_dialog.reset_button"))
-        reset_button.clicked.connect(lambda: _set_prompt_text(default_prompt_templates()[key]))
+        reset_button.clicked.connect(lambda: self._on_reset_clicked(key, _set_prompt_text))
         reset_row.addWidget(reset_button)
         tab_layout.addLayout(reset_row)
+        self._reset_buttons[key] = reset_button
+        self._text_edits[key] = text_edit
+
+        text_edit.textChanged.connect(lambda: self._on_text_changed(key))
+        self._on_text_changed(key)
 
         self.tabs.addTab(tab, tab_title)
         return text_edit
+
+    def _on_reset_clicked(self, key: str, set_text) -> None:
+        # Effacement immédiat et permanent sur disque, indépendant du bouton
+        # Sauvegarder/Annuler de la fenêtre : comportement voulu, "Réinitialiser"
+        # doit agir tout de suite plutôt qu'attendre la validation du dialogue.
+        default_text = default_prompt_templates()[key]
+        reset_custom_prompt(i18n.current_language(), key, self._profile_id)
+        self._initial_texts[key] = default_text
+        set_text(default_text)
+
+    def _on_text_changed(self, key: str) -> None:
+        current_text = self._text_edits[key].toPlainText()
+        self._reset_buttons[key].setEnabled(current_text != default_prompt_templates()[key])
+        any_modified = any(
+            self._text_edits[k].toPlainText() != self._initial_texts[k] for k in self._text_edits
+        )
+        self._save_button.setEnabled(any_modified)
 
     def prompts(self) -> dict[str, str]:
         """Renvoie les prompts saisis. Une valeur identique au défaut équivaut
@@ -550,14 +936,16 @@ class DropZone(QLabel):
     def mousePressEvent(self, event) -> None:
         if self.busy:
             return
+        default_dir = config.load_last_book_dir()
         path, _ = QFileDialog.getOpenFileName(
             self,
             tr("drop_zone.file_dialog_title"),
-            "",
+            str(default_dir) if default_dir else "",
             tr("drop_zone.file_dialog_filter"),
         )
         if not path:
             return
+        config.save_last_book_dir(Path(path).parent)
         if path.lower().endswith(REPORT_EXTENSION):
             self.on_report_dropped(path)
         else:
@@ -752,6 +1140,16 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(tr("main_window.window_title", version=VERSION))
+        # Sans ceci, Qt calcule automatiquement une taille minimale à partir
+        # du contenu du layout (header, onglets...), assez grande pour
+        # empêcher Windows Snap de réduire la fenêtre à 1/4 d'écran sur
+        # certains moniteurs. Cette valeur ne force aucune réorganisation du
+        # contenu : elle autorise seulement Qt/Windows à redimensionner plus
+        # petit que ce calcul automatique ; le contenu peut alors se
+        # chevaucher ou être partiellement coupé en dessous de sa taille
+        # confortable, comme pour toute fenêtre Windows redimensionnée
+        # au-delà de son contenu.
+        self.setMinimumSize(400, 300)
         self._size_to_available_screen()
 
         self.selected_book_path: str | None = None
@@ -776,25 +1174,38 @@ class MainWindow(QMainWindow):
             daily_state_path=config.get_settings_dir() / ".quota_state_pending.json",
             settings_dir=config.get_settings_dir(),
         )
-        # Bascule immédiatement sur le fichier de la clé déjà enregistrée
-        # (cas normal, hors tout premier lancement sans clé) : sans ça,
-        # l'affichage du quota au démarrage montrerait encore
-        # .quota_state_pending.json (toujours à 0) jusqu'au premier clic sur
-        # "Résumer".
-        _already_saved_api_key = config.load_api_key()
-        if _already_saved_api_key:
-            self.quota_tracker.switch_api_key(_already_saved_api_key)
+        # Marqueur de comptage des instances vivantes (voir
+        # instance_lock.count_alive_instances()), indépendant du verrou par
+        # profil ci-dessous : une instance sans profil actif doit quand même
+        # être comptée par le bouton "nouvelle instance" pour respecter
+        # instance_lock.MAX_INSTANCES.
+        instance_lock.register_instance()
+        # Attribue automatiquement à cette instance le premier profil de clé
+        # API non verrouillé par une autre instance en cours d'exécution (voir
+        # app.instance_lock), pour permettre de lancer plusieurs instances de
+        # Distillat en parallèle (une clé différente chacune) sans risquer
+        # qu'une instance écrase silencieusement le profil actif d'une autre.
+        # Bascule aussi immédiatement le suivi de quota sur le fichier du
+        # profil attribué : sans ça, l'affichage du quota au démarrage
+        # montrerait encore .quota_state_pending.json (toujours à 0) jusqu'au
+        # premier clic sur "Résumer".
+        self.active_profile: dict | None = None
+        self._resolve_active_profile()
         # Ligne de session dans le journal d'appels API : délimite les
-        # lancements de l'application (version, processus, machine, compteur
-        # quotidien tel que rechargé du disque), pour situer chaque
-        # génération dans sa session et rendre détectable un double lancement
-        # simultané (deux lignes DEMARRAGE avec des pid différents sans
-        # fermeture entre). Le nom de la machine permet d'attribuer son
-        # origine à un log recueilli sur un autre PC (ex : tests croisés sur
-        # la machine d'un tiers avec sa propre clé API).
+        # lancements de l'application (version, machine, profil de clé API
+        # attribué, compteur quotidien tel que rechargé du disque), pour
+        # situer chaque génération dans sa session et rendre détectable un
+        # double lancement simultané (deux lignes DEMARRAGE sans fermeture
+        # entre - le pid, distinguant déjà deux instances, est ajouté
+        # automatiquement en préfixe de chaque ligne du journal par
+        # _log_api_call(), voir gemini_client.py). Le nom de la machine
+        # permet d'attribuer son origine à un log recueilli sur un autre PC
+        # (ex : tests croisés sur la machine d'un tiers avec sa propre clé
+        # API).
         log_api_event(
-            f"application DEMARRAGE version={VERSION} pid={os.getpid()} "
+            f"application DEMARRAGE version={VERSION} "
             f"machine={platform.node()} "
+            f"profil={self.active_profile['name'] if self.active_profile else '(aucun)'} "
             f"requetes_jour_chargees={self.quota_tracker.snapshot().requests_today}"
         )
 
@@ -819,7 +1230,6 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._update_quota_display(self.quota_tracker.snapshot())
-        self._ensure_api_key(prompt_if_missing=False)
         check_for_updates_on_startup(self)
 
     def _size_to_available_screen(self) -> None:
@@ -856,12 +1266,14 @@ class MainWindow(QMainWindow):
         à sa prochaine mise à jour naturelle."""
         self.setWindowTitle(tr("main_window.window_title", version=VERSION))
         self.title_label.setText(tr("main_window.title_label"))
+        self.new_instance_button.setText(tr("main_window.new_instance_button"))
         self.language_label.setText(tr("language_selector.label"))
         self.language_selector.setItemText(0, tr("language_selector.french"))
         self.language_selector.setItemText(1, tr("language_selector.english"))
         self.prompts_button.setText(tr("main_window.prompts_button"))
         self.quota_limits_button.setText(tr("main_window.quota_limits_button"))
-        self.api_key_button.setText(tr("main_window.api_key_button"))
+        self.api_key_button.setText(tr("main_window.profiles_button"))
+        self._update_profile_label()
         self.output_language_hint_label.setText(tr("main_window.output_language_hint"))
         if self._latest_version_available:
             self.update_banner_label.setText(
@@ -912,6 +1324,9 @@ class MainWindow(QMainWindow):
         self.title_label = QLabel(tr("main_window.title_label"))
         self.title_label.setStyleSheet("font-size: 22px; font-weight: bold;")
         header.addWidget(self.title_label)
+        self.new_instance_button = QPushButton(tr("main_window.new_instance_button"))
+        self.new_instance_button.clicked.connect(self._on_new_instance_clicked)
+        header.addWidget(self.new_instance_button)
         header.addStretch()
         self.language_label = QLabel(tr("language_selector.label"))
         header.addWidget(self.language_label)
@@ -928,10 +1343,14 @@ class MainWindow(QMainWindow):
         self.quota_limits_button = QPushButton(tr("main_window.quota_limits_button"))
         self.quota_limits_button.clicked.connect(self._on_edit_quota_limits)
         header.addWidget(self.quota_limits_button)
-        self.api_key_button = QPushButton(tr("main_window.api_key_button"))
+        self.active_profile_label = QLabel()
+        self.active_profile_label.setStyleSheet("color: #555;")
+        header.addWidget(self.active_profile_label)
+        self.api_key_button = QPushButton(tr("main_window.profiles_button"))
         self.api_key_button.clicked.connect(self._on_edit_api_key)
         header.addWidget(self.api_key_button)
         layout.addLayout(header)
+        self._update_profile_label()
 
         # Rappel discret mais permanent : la langue de l'UI détermine aussi la
         # langue dans laquelle Gemini rédige la fiche, ce qui n'est pas évident
@@ -964,6 +1383,8 @@ class MainWindow(QMainWindow):
         file_row = QHBoxLayout()
         self.file_label = QLabel(tr("main_window.no_file_selected"))
         self.file_label.setStyleSheet("color: #555;")
+        self.file_label.setAlignment(Qt.AlignCenter)
+        file_row.addStretch()
         file_row.addWidget(self.file_label)
         file_row.addStretch()
 
@@ -1138,6 +1559,8 @@ class MainWindow(QMainWindow):
         self.cover_label.setAlignment(Qt.AlignCenter)
         self.cover_label.setStyleSheet("border: 1px solid #ccc; background-color: #f0f0f0;")
         self.cover_label.setText(tr("main_window.no_cover"))
+        self.cover_label.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.cover_label.customContextMenuRequested.connect(self._on_cover_context_menu)
         cover_row = QHBoxLayout()
         cover_row.addStretch()
         cover_row.addWidget(self.cover_label)
@@ -1267,47 +1690,127 @@ class MainWindow(QMainWindow):
             self.characters_layout.insertWidget(index, card)
             self.characters_layout.insertSpacing(index + 1, 10)
 
+    def _resolve_active_profile(self) -> None:
+        """Attribue à cette instance le premier profil de clé API dont le
+        verrou n'est pas détenu par une autre instance vivante (voir
+        app.instance_lock) ET dont la clé API est réellement lisible via
+        keyring, dans l'ordre d'enregistrement des profils. Bascule aussitôt
+        le suivi de quota sur le profil attribué. Si des profils existent
+        mais sont tous verrouillés ailleurs, l'instance démarre simplement
+        sans profil actif (self.active_profile reste None) : l'utilisateur
+        en sera informé au moment où il en aura réellement besoin (clic sur
+        "Résumer" -> _ensure_api_key() -> ProfilesDialog, qui affiche déjà
+        quels profils sont occupés), plutôt que par un avertissement au
+        démarrage qui apparaîtrait avant même l'affichage de la fenêtre
+        (modale bloquante avant window.show(), déroutant - constaté le
+        2026-07-22). Un profil dont le verrou est acquis mais dont la clé
+        n'est pas lisible (Gestionnaire d'identification Windows
+        indisponible pour cette entrée précise) libère aussitôt son verrou
+        et cède la place au profil suivant (audit du 2026-07-22) : le
+        garder comme profil actif sans clé utilisable bloquerait ce profil
+        pour toute autre instance sans qu'aucune génération ne soit
+        possible avec lui depuis celle-ci."""
+        for profile in config.list_profiles():
+            if not instance_lock.acquire_profile_lock(profile["id"]):
+                continue
+            api_key = config.load_profile_api_key(profile["id"])
+            if not api_key:
+                instance_lock.release_profile_lock(profile["id"])
+                continue
+            self.active_profile = profile
+            self.quota_tracker.switch_api_key(api_key)
+            return
+
+    def _update_profile_label(self) -> None:
+        if self.active_profile is not None:
+            self.active_profile_label.setText(
+                tr("main_window.active_profile_label", name=self.active_profile["name"])
+            )
+        else:
+            self.active_profile_label.setText(tr("main_window.no_profile_label"))
+
     def _ensure_api_key(self, prompt_if_missing: bool = True) -> str | None:
-        api_key = config.load_api_key()
-        if api_key:
-            return api_key
+        if self.active_profile is not None:
+            api_key = config.load_profile_api_key(self.active_profile["id"])
+            if api_key:
+                return api_key
         if not prompt_if_missing:
             return None
         return self._prompt_for_api_key()
 
     def _prompt_for_api_key(self) -> str | None:
-        dialog = ApiKeyDialog(self, current_api_key=config.load_api_key())
-        if dialog.exec_() == QDialog.Accepted:
-            api_key = dialog.api_key()
-            if not api_key:
-                QMessageBox.warning(
-                    self, tr("api_key_dialog.missing_key_title"), tr("api_key_dialog.missing_key_message")
-                )
-                return None
-            if not config.save_api_key(api_key):
-                QMessageBox.critical(
-                    self,
-                    tr("api_key_dialog.save_error_title"),
-                    tr("api_key_dialog.save_error_message"),
-                )
-                return None
-            # Bascule aussitôt sur le fichier de quota de cette clé (et
-            # rafraîchit l'affichage), sans attendre le prochain clic sur
-            # "Résumer" : sans quoi le compteur affiché resterait celui de
-            # l'ancienne clé jusqu'à la prochaine génération.
-            self._update_quota_display(self.quota_tracker.switch_api_key(api_key))
-            return api_key
+        generation_in_progress = self.worker is not None and self.worker.isRunning()
+        dialog = ProfilesDialog(
+            self,
+            quota_tracker=self.quota_tracker,
+            active_profile=self.active_profile,
+            generation_in_progress=generation_in_progress,
+        )
+        dialog.exec_()
+        self.active_profile = dialog.active_profile
+        self._update_profile_label()
+        self._update_quota_display(self.quota_tracker.snapshot())
+        if self.active_profile is not None:
+            return config.load_profile_api_key(self.active_profile["id"])
         return None
+
+    def _on_new_instance_clicked(self) -> None:
+        """Ouvre une nouvelle instance de Distillat directement depuis
+        l'application (bouton en haut de la fenêtre, à droite du titre),
+        sans avoir à relancer l'exe/le script manuellement de l'extérieur.
+        Ne vérifie pas au préalable qu'un profil sera disponible pour la
+        nouvelle instance : celle-ci affichera elle-même l'avertissement
+        "aucun profil disponible" déjà existant (_resolve_active_profile())
+        si besoin, sans dupliquer cette logique ici. La seule vérification
+        faite ici est le nombre d'instances déjà vivantes
+        (instance_lock.MAX_INSTANCES) : contrairement à la disponibilité de
+        profil, ce n'est pas une ressource par compte Google mais un simple
+        plafond d'ergonomie, qu'il vaut mieux vérifier avant de lancer un
+        processus inutile plutôt qu'après."""
+        if instance_lock.count_alive_instances() >= instance_lock.MAX_INSTANCES:
+            QMessageBox.warning(
+                self,
+                tr("main_window.max_instances_title"),
+                tr("main_window.max_instances_message", max_instances=instance_lock.MAX_INSTANCES),
+            )
+            return
+        # En mode compilé, sys.executable pointe déjà sur Distillat.exe ; en
+        # développement, il pointe sur l'interpréteur Python du venv, à qui
+        # il faut alors passer le chemin de main.py en argument (résolu via
+        # config.get_app_dir(), qui renvoie la racine du projet en dev).
+        if getattr(sys, "frozen", False):
+            args = [sys.executable]
+        else:
+            args = [sys.executable, str(config.get_app_dir() / "main.py")]
+        try:
+            subprocess.Popen(args)
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                tr("main_window.new_instance_error_title"),
+                tr("main_window.new_instance_error_message", error=exc),
+            )
 
     def _on_edit_api_key(self) -> None:
         self._prompt_for_api_key()
 
     def _on_edit_prompts(self) -> None:
-        current_prompts = load_custom_prompts(i18n.current_language())
-        dialog = PromptsDialog(self, current_prompts=current_prompts)
+        # Les prompts personnalisés sont propres à chaque profil de clé API
+        # (2026-07-22, support des profils multiples) : sans profil actif,
+        # aucune personnalisation cohérente à afficher ni à sauvegarder.
+        if self.active_profile is None:
+            QMessageBox.warning(
+                self,
+                tr("prompts_dialog.no_profile_title"),
+                tr("prompts_dialog.no_profile_message"),
+            )
+            return
+        profile_id = self.active_profile["id"]
+        current_prompts = load_custom_prompts(i18n.current_language(), profile_id)
+        dialog = PromptsDialog(self, current_prompts=current_prompts, profile_id=profile_id)
         if dialog.exec_() == QDialog.Accepted:
             try:
-                save_custom_prompts(i18n.current_language(), dialog.prompts())
+                save_custom_prompts(i18n.current_language(), dialog.prompts(), profile_id)
             except OSError as exc:
                 QMessageBox.critical(
                     self,
@@ -1316,6 +1819,17 @@ class MainWindow(QMainWindow):
                 )
 
     def _on_edit_quota_limits(self) -> None:
+        # Les limites RPM/TPM/RPD sont propres à chaque clé API (voir
+        # quota_tracker.quota_limits_path_for_key, 2026-07-22) : sans profil
+        # actif, aucun fichier de limites n'est encore résolu pour cette
+        # instance, donc rien de cohérent à éditer ni à sauvegarder.
+        if self.quota_tracker.quota_limits_path is None:
+            QMessageBox.warning(
+                self,
+                tr("quota_limits_dialog.no_profile_title"),
+                tr("quota_limits_dialog.no_profile_message"),
+            )
+            return
         snapshot = self.quota_tracker.snapshot()
         dialog = QuotaLimitsDialog(
             self,
@@ -1326,7 +1840,7 @@ class MainWindow(QMainWindow):
         if dialog.exec_() == QDialog.Accepted:
             rpm_limit, tpm_limit, rpd_limit = dialog.limits()
             try:
-                save_quota_limits(config.get_settings_dir(), rpm_limit, tpm_limit, rpd_limit)
+                save_quota_limits(self.quota_tracker.quota_limits_path, rpm_limit, tpm_limit, rpd_limit)
             except OSError as exc:
                 QMessageBox.critical(
                     self,
@@ -1565,6 +2079,9 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self._confirm_discard_unsaved_report():
+            if self.active_profile is not None:
+                instance_lock.release_profile_lock(self.active_profile["id"])
+            instance_lock.unregister_instance()
             event.accept()
         else:
             event.ignore()
@@ -1644,7 +2161,8 @@ class MainWindow(QMainWindow):
         # exposer la clé elle-même si le fichier de log est partagé).
         api_key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:8]
         log_api_event(f"generation DEMARRAGE cle_api_hash={api_key_hash}")
-        self.worker = SummarizeWorker(self.selected_book_path, api_key, self.quota_tracker, resume_state)
+        profile_id = self.active_profile["id"] if self.active_profile is not None else None
+        self.worker = SummarizeWorker(self.selected_book_path, api_key, self.quota_tracker, profile_id, resume_state)
         self.worker.progress.connect(self._on_progress)
         self.worker.quota_updated.connect(self._update_quota_display)
         self.worker.finished_ok.connect(self._on_finished_ok)
@@ -1789,6 +2307,38 @@ class MainWindow(QMainWindow):
         else:
             self.cover_label.setText(tr("main_window.no_cover"))
 
+    def _on_cover_context_menu(self, pos) -> None:
+        if not self.last_result:
+            return
+        menu = QMenu(self)
+        set_cover_action = menu.addAction(tr("main_window.set_cover_action"))
+        set_cover_action.triggered.connect(self._on_set_cover_manually)
+        menu.exec_(self.cover_label.mapToGlobal(pos))
+
+    def _on_set_cover_manually(self) -> None:
+        if not self.last_result:
+            return
+        default_dir = config.load_last_cover_dir()
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("main_window.set_cover_dialog_title"),
+            str(default_dir) if default_dir else "",
+            tr("main_window.set_cover_dialog_filter"),
+        )
+        if not path:
+            return
+        raw_bytes = Path(path).read_bytes()
+        pixmap = QPixmap()
+        if not pixmap.loadFromData(raw_bytes):
+            QMessageBox.warning(
+                self, tr("main_window.set_cover_action"), tr("main_window.set_cover_invalid_image")
+            )
+            return
+        self.last_result.cover_image = shrink_cover_image(raw_bytes)
+        self._report_dirty = True
+        self._display_cover(self.last_result)
+        config.save_last_cover_dir(Path(path).parent)
+
     def _on_finished_ok(self, result: BookReport) -> None:
         self._elapsed_timer.stop()
         self.last_result = result
@@ -1799,6 +2349,9 @@ class MainWindow(QMainWindow):
         self._report_dirty = True
         self._display_book_report(result)
         self.result_tabs.setCurrentIndex(0)
+        winsound.PlaySound(
+            str(config.get_success_sound_path()), winsound.SND_FILENAME | winsound.SND_ASYNC
+        )
         mode = (
             tr("main_window.mode_split", chapter_count=result.chapter_count)
             if result.was_split

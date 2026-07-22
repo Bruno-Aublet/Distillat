@@ -8,7 +8,8 @@
   },
   "epub_parser": {
     "fallback_chapter_title": "Chapitre {index}",
-    "no_text_extracted": "Aucun contenu textuel n'a pu être extrait de cet EPUB."
+    "no_text_extracted": "Aucun contenu textuel n'a pu être extrait de cet EPUB.",
+    "uncompressed_too_large": "Ce fichier EPUB déclare un contenu décompressé anormalement volumineux ({size_mb} Mo, plafond : {max_mb} Mo) et a été refusé par précaution : il s'agit probablement d'un fichier corrompu ou piégé, pas d'un vrai livre."
   },
   "pdf_parser": {
     "no_text_extracted": "Aucun texte n'a pu être extrait de ce PDF (il s'agit peut-être d'un scan sans OCR).",
@@ -34,6 +35,7 @@
     "empty_response": "Réponse vide reçue de l'API Gemini.",
     "invalid_prompt_placeholder": "Le prompt personnalisé « {prompt_label} » contient une erreur : le repère {error} n'est pas reconnu. Vérifiez son orthographe dans la fenêtre Prompts (bouton « Réinitialiser ce prompt » si besoin).",
     "unreadable_response": "Réponse de Gemini illisible (format inattendu) : {error}",
+    "truncated_response": "Réponse de Gemini interrompue en cours de génération car trop longue (limite de longueur du modèle atteinte) : le contenu reçu est incomplet et inexploitable.",
     "unexpected_response_shape": "La réponse de Gemini n'a pas la forme attendue (racine JSON non exploitable).",
     "no_usable_summary": "La réponse de Gemini ne contient pas de résumé exploitable."
   },
@@ -84,16 +86,43 @@
   "eye_icon": {
     "tooltip": "Afficher/masquer la clé"
   },
-  "api_key_dialog": {
-    "window_title": "Clé API Gemini",
+  "profiles_dialog": {
+    "window_title": "Profils de clé API",
+    "list_info": "Chaque profil correspond à une clé API Gemini distincte. Au démarrage, l'application choisit automatiquement le premier profil non utilisé par une autre instance de Distillat déjà lancée sur cet ordinateur.",
+    "edit_window_title": "Clé API Gemini",
     "info": "Récupérez votre clé gratuite sur <a href=\"https://aistudio.google.com/apikey\">Google AI Studio</a>. Elle sera enregistrée de façon chiffrée via le Gestionnaire d'identification Windows - ne la partagez pas.",
+    "account_warning": "⚠️ Le lien ouvre votre navigateur sur le compte Google actuellement connecté par défaut : si vous voulez une clé pour un autre compte Google, déconnectez-vous d'abord (ou ouvrez le lien en navigation privée).",
     "warning": "⚠️ Ne cliquez jamais sur « Activer la facturation » : vous perdriez le palier gratuit de Gemini.",
+    "name_label": "Nom du profil :",
+    "name_placeholder": "Ex : Compte principal",
     "key_placeholder": "AIza...",
     "key_label": "Clé API :",
-    "missing_key_title": "Clé API manquante",
-    "missing_key_message": "Veuillez saisir une clé API valide.",
+    "use_button": "Utiliser",
+    "add_button": "Ajouter",
+    "edit_button": "Modifier",
+    "delete_button": "Supprimer",
+    "close_button": "Fermer",
+    "active_suffix": " (actif dans cette fenêtre)",
+    "locked_suffix": " (utilisé par une autre fenêtre)",
+    "missing_fields_title": "Champs manquants",
+    "missing_fields_message": "Veuillez saisir un nom et une clé API valides.",
+    "duplicate_name_title": "Nom déjà utilisé",
+    "duplicate_name_message": "Un profil nommé « {name} » existe déjà. Choisissez un nom différent.",
+    "duplicate_key_title": "Clé API déjà enregistrée",
+    "duplicate_key_message": "Cette clé API est déjà enregistrée sous le profil « {name} ». Une même clé ne peut pas être utilisée par deux profils différents.",
     "save_error_title": "Erreur d'enregistrement",
-    "save_error_message": "Impossible d'enregistrer la clé API : le Gestionnaire d'identification Windows est indisponible."
+    "save_error_message": "Impossible d'enregistrer la clé API : le Gestionnaire d'identification Windows est indisponible.",
+    "delete_confirm_title": "Supprimer ce profil ?",
+    "delete_confirm_message": "Supprimer définitivement le profil « {name} » et sa clé API enregistrée ?",
+    "delete_confirm_yes": "Supprimer",
+    "delete_confirm_no": "Annuler",
+    "locked_title": "Profil déjà utilisé",
+    "locked_message": "Le profil « {name} » est actuellement utilisé par une autre fenêtre de Distillat ouverte sur cet ordinateur.",
+    "in_use_title": "Profil en cours d'utilisation",
+    "in_use_generation_message": "Impossible de supprimer le profil « {name} » : une génération est actuellement en cours avec ce profil dans cette fenêtre. Attendez la fin de la génération avant de le supprimer.",
+    "switch_during_generation_message": "Impossible de changer de profil actif : une génération est actuellement en cours avec le profil actuel dans cette fenêtre. Attendez la fin de la génération avant de changer de profil.",
+    "save_button": "Sauvegarder",
+    "cancel_button": "Annuler"
   },
   "quota_limits_dialog": {
     "window_title": "Limites de quota Gemini",
@@ -103,14 +132,22 @@
     "tpm_label": "Tokens par minute (TPM) :",
     "rpd_label": "Requêtes par jour (RPD) :",
     "save_error_title": "Erreur de sauvegarde",
-    "save_error_message": "Impossible d'enregistrer les limites de quota : {error}"
+    "save_error_message": "Impossible d'enregistrer les limites de quota : {error}",
+    "no_profile_title": "Aucun profil actif",
+    "no_profile_message": "Les limites de quota sont propres à chaque profil de clé API. Sélectionnez ou créez d'abord un profil via le bouton « Profils ».",
+    "ok_button": "OK",
+    "cancel_button": "Annuler"
   },
   "prompts_dialog": {
     "window_title": "Prompts Gemini",
     "warning": "⚠️ Ces prompts pilotent directement la génération des fiches et fonctionnent tels quels. Les modifier peut faire échouer la génération ou produire des résultats incohérents (résultat non exploitable, réponse non reconnue par l'application, etc.) : modifiez-les à vos risques et périls. Les portions entre accolades, par exemple {book_title} ou {full_text}, sont remplacées automatiquement par l'application : ne les supprimez pas et ne changez pas leur orthographe, sous peine d'erreur.",
     "reset_button": "Réinitialiser ce prompt",
+    "save_button": "Sauvegarder",
+    "cancel_button": "Annuler",
     "save_error_title": "Erreur de sauvegarde",
     "save_error_message": "Impossible d'enregistrer les prompts : {error}",
+    "no_profile_title": "Aucun profil actif",
+    "no_profile_message": "Les prompts personnalisés sont propres à chaque profil de clé API. Sélectionnez ou créez d'abord un profil via le bouton « Profils ».",
     "tabs": {
       "full_report": {
         "title": "Résumé + personnages + analyse",
@@ -144,9 +181,16 @@
   "main_window": {
     "window_title": "Distillat v{version} - Résumé de livres avec Gemini",
     "title_label": "Distillat",
+    "new_instance_button": "Nouvelle instance",
+    "max_instances_title": "Trop d'instances ouvertes",
+    "max_instances_message": "{max_instances} instances de Distillat sont déjà ouvertes sur cet ordinateur. Fermez-en une avant d'en ouvrir une nouvelle.",
+    "new_instance_error_title": "Erreur de lancement",
+    "new_instance_error_message": "Impossible de lancer une nouvelle instance de Distillat : {error}",
     "prompts_button": "Prompts",
     "quota_limits_button": "Limites de quota",
-    "api_key_button": "Clé API",
+    "profiles_button": "Profils",
+    "active_profile_label": "Profil : {name}",
+    "no_profile_label": "Aucun profil actif",
     "output_language_hint": "Les fiches sont générées en français : ce réglage détermine aussi la langue des résumés produits par Gemini.",
     "update_banner": "<a href=\"#\">🆕 Une nouvelle version de Distillat est disponible (v{version}), cliquez pour la télécharger</a>",
     "no_file_selected": "Aucun fichier sélectionné",
@@ -164,6 +208,10 @@
     "download_link": "Téléchargement",
     "changelog_link": "Changelog",
     "no_cover": "Pas de couverture",
+    "set_cover_action": "Définir la couverture...",
+    "set_cover_dialog_title": "Choisir une image de couverture",
+    "set_cover_dialog_filter": "Images (*.jpg *.jpeg *.png *.bmp *.gif *.webp)",
+    "set_cover_invalid_image": "Ce fichier n'est pas une image valide.",
     "summary_placeholder": "Le résumé court en français apparaîtra ici après traitement.",
     "detailed_summary_placeholder": "Le résumé détaillé en français apparaîtra ici après traitement.",
     "characters_placeholder": "Les fiches des personnages principaux apparaîtront ici après traitement.",
@@ -193,7 +241,7 @@
     "quota_exceeded_warning": "🚫 Quota Gemini dépassé, l'appli ne peut plus faire de requêtes pour l'instant. Réessayez plus tard (le quota par minute se réinitialise en 60 s, le quota quotidien à minuit heure du Pacifique, soit en général en matinée en France).",
     "resume_wait_hint_daily": "C'est le quota JOURNALIER (nombre de requêtes/jour) qui est épuisé : il ne se réinitialise qu'à minuit heure du Pacifique (Californie), soit en général en matinée en France, il faudra donc attendre avant de pouvoir reprendre. Une fois ce délai passé, ",
     "resume_wait_hint_minute": "C'est le quota PAR MINUTE (requêtes ou tokens/minute) qui est temporairement dépassé : il se libère de lui-même en général en moins de 2 minutes. Une fois ce délai passé, ",
-    "resume_wait_hint_other": "Ce n'est pas un problème de quota : rien à attendre, il s'agit probablement d'un aléa ponctuel de génération. Vous pouvez réessayer tout de suite, ",
+    "resume_wait_hint_other": "Ce n'est pas un problème de quota, il s'agit probablement d'un aléa ponctuel de génération. Vous pouvez réessayer tout de suite, ",
     "resume_hint_suffix": "\n\nRien n'est perdu : les {batches_done}/{batches_total} lot(s) de chapitres déjà résumés avec succès ont été sauvegardés. {wait_hint}glissez-déposez à nouveau ce même fichier EPUB/PDF et cliquez sur \"Résumer\" : Distillat reconnaîtra automatiquement où le traitement s'était arrêté et proposera de reprendre exactement à partir de là, sans refaire le travail déjà fait.",
     "error_title": "Erreur",
     "save_pdf_dialog_title": "Enregistrer le résumé",

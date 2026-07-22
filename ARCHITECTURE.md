@@ -44,25 +44,91 @@ sauvegarde JSON et/ou export PDF.
   - `Documents\Distillat\Fiches` (toujours) comme dossier de repli initial
     pour les fiches `.distillat.json` et les exports PDF, tant qu'aucun
     dossier n'a encore été mémorisé (voir ci-dessous).
-  - Clé API Gemini stockée chiffrée via `keyring` (Gestionnaire
-    d'identification Windows), jamais en clair sur disque.
-    `load_api_key()`/`save_api_key()` absorbent `keyring.errors.KeyringError`
+  - `get_resource_dir()`/`get_app_icon_path()`/`get_success_sound_path()` :
+    résolution des ressources embarquées à la compilation (icône, son de fin
+    de génération `assets/success.wav`, `LICENSE`, `CHANGELOG.md`) - même
+    logique `sys._MEIPASS` en mode gelé que pour le reste de `get_resource_dir()`,
+    pour ne jamais dupliquer leur emplacement selon le mode de lancement.
+  - Clés API Gemini stockées chiffrées via `keyring` (Gestionnaire
+    d'identification Windows), jamais en clair sur disque. Depuis l'ajout du
+    support multi-instances (2026-07-22, voir `app/instance_lock.py`
+    ci-dessous), plusieurs **profils** nommés peuvent coexister : chaque
+    profil (`{"id": <uuid4>, "name": <str>}`, sous la clé `"api_profiles"` de
+    `settings.json`, `list_profiles()`/`save_profiles()`) a sa propre entrée
+    keyring (`gemini_api_key_<id>`, `load_profile_api_key()`/
+    `save_profile_api_key()`/`delete_profile_api_key()`), distincte pour
+    chaque profil. Toutes ces fonctions absorbent `keyring.errors.KeyringError`
     (service indisponible) plutôt que de laisser planter l'application.
+    L'ancienne entrée keyring unique (`KEYRING_USERNAME =
+    "gemini_api_key"`, `load_api_key()`/`save_api_key()`, conservées
+    inchangées) est reprise automatiquement dans un premier profil "Défaut"
+    par `_migrate_legacy_api_key_to_profile()` (appelée depuis
+    `migrate_legacy_files()`) si aucun profil n'existe encore ; cette
+    migration ne fait elle-même qu'une copie (jamais de déplacement), mais
+    `_cleanup_legacy_api_key_entry()` (appelée juste après par
+    `migrate_legacy_files()`, ajoutée à l'audit de sécurité du 2026-07-22)
+    supprime ensuite l'ancienne entrée keyring, uniquement après avoir
+    vérifié (relecture réelle via `find_profile_by_api_key()`) qu'une copie
+    identique de sa valeur existe bien dans l'entrée d'un profil - sans cette
+    purge, une copie du secret restait indéfiniment dans le Gestionnaire
+    d'identification Windows, survivant même à une rotation de clé faite
+    depuis l'UI (qui ne modifie que l'entrée du profil) ; une ancienne entrée
+    dont la valeur ne correspond à aucun profil (seule copie restante d'une
+    clé) est laissée intacte, aucune suppression sur un simple doute. Le
+    contrôle "aucun profil encore créé" et l'écriture de
+    cette migration se font sous le verrou inter-processus de settings.json
+    (audit du 2026-07-22) : deux instances lancées simultanément au premier
+    démarrage suivant la mise à jour créaient sinon chacune son propre
+    profil "Défaut" (UUID différents), la dernière écriture écrasant l'autre
+    et laissant son entrée keyring orpheline. `find_profile_by_name(name, exclude_profile_id=None)`/
+    `find_profile_by_api_key(api_key, exclude_profile_id=None)` (ajoutées le
+    2026-07-22) cherchent un profil existant de même nom, ou de même clé réelle
+    (relue via keyring, pas un hash) qu'une valeur candidate ; utilisées par
+    `main_window.ProfilesDialog._on_add_clicked()`/`_on_edit_clicked()` pour
+    interdire deux profils de même nom ou de même clé (message d'erreur
+    nommant le profil déjà concerné), avant tout `save_profile_api_key()`/
+    `save_profiles()`. `exclude_profile_id` ignore le profil en cours de
+    modification, pour qu'un nom ou une clé laissés inchangés à l'édition ne
+    se signalent jamais comme leur propre doublon.
   - `load_settings()`/`save_settings(update)` : fonctions génériques centrales
     pour `settings.json` (dossier de config), qui regroupe tous les réglages
     peu fréquemment modifiés (langue de l'UI, prompts personnalisés par
-    langue, derniers dossiers utilisés) en un seul fichier - à la différence
-    du compteur de quota (`.quota_state_<hash>.json`, un fichier par clé API
-    depuis le 2026-07-21, voir `quota_tracker.py` ci-dessous) ou des limites
-    RPM/TPM/RPD (`quota_limits.json`), réécrits bien plus souvent (à chaque
-    appel Gemini pour le premier) et donc gardés dans des fichiers séparés
-    pour limiter la
+    profil de clé API puis par langue, derniers dossiers utilisés) en un seul
+    fichier - à la différence du compteur de quota (`.quota_state_<hash>.json`,
+    un fichier par clé API depuis le 2026-07-21, voir `quota_tracker.py`
+    ci-dessous) ou des limites RPM/TPM/RPD (`quota_limits_<hash>.json`, un
+    fichier par clé API depuis le 2026-07-22), réécrits bien plus souvent (à
+    chaque appel Gemini pour le premier) et donc gardés dans des fichiers
+    séparés pour limiter la
     fenêtre d'exposition à une corruption et éviter de réécrire inutilement
     des données volumineuses (les prompts personnalisés) à chaque appel API.
     `save_settings()` fait un cycle lecture-fusion-écriture complet (une clé
     de premier niveau, ex. `"prompts"` ou `"last_dirs"`, n'écrase jamais les
-    autres). Toute nouvelle fonction de persistance ajoutée doit passer par
-    ces deux fonctions plutôt que de créer un nouveau fichier, sauf besoin
+    autres). Depuis l'audit multi-instances du 2026-07-22, ce cycle est
+    sérialisé entre processus par `_settings_lock()` (verrou d'un octet du
+    fichier dédié `.settings.lock` via `msvcrt.locking`, best-effort : après
+    ~10 s d'attente infructueuse, on continue sans verrou plutôt que de
+    faire échouer la sauvegarde) et l'écriture est atomique
+    (`_write_settings_file()` : fichier temporaire suffixé du PID puis
+    `os.replace()`) - sans quoi deux instances parallèles se perdaient
+    mutuellement des mises à jour (ex. un profil ajouté par l'une effacé par
+    la sauvegarde d'un dernier dossier utilisé dans l'autre, son entrée
+    keyring devenant orpheline, irrécupérable depuis l'application), et un
+    crash en pleine écriture pouvait laisser un settings.json tronqué que
+    `load_settings()` lisait ensuite comme `{}` (perte silencieuse de tous
+    les réglages et de la liste des profils). `update_settings(mutate)`
+    (ajoutée au même moment) : cycle lecture-modification-écriture complet
+    sous ce même verrou, pour toute modification qui dépend du contenu
+    existant (ajout à une liste, mise à jour d'un sous-dictionnaire) ;
+    `mutate(data)` modifie en place le dict fraîchement relu et retourne
+    True si quelque chose a réellement changé (False : rien n'est réécrit).
+    Utilisée par `_save_last_dir()`, par les mutateurs de profils
+    `add_profile()`/`rename_profile()`/`remove_profile()` (à préférer à un
+    enchaînement `list_profiles()` puis `save_profiles()` dans l'appelant,
+    qui recréerait la fenêtre de mise à jour perdue que le verrou ferme) et
+    par `app/prompts_store.py`. Toute nouvelle fonction de persistance
+    ajoutée doit passer par `load_settings()`/`save_settings()`/
+    `update_settings()` plutôt que de créer un nouveau fichier, sauf besoin
     similaire à celui du quota (écritures très fréquentes ou volume important
     de données peu liées aux autres réglages).
   - `load_language_setting()`/`save_language_setting()` : langue de l'UI
@@ -70,16 +136,21 @@ sauvegarde JSON et/ou export PDF.
     `settings.json`. `None` si aucune langue n'a encore été enregistrée
     (premier démarrage), consommé par `app/i18n.py` pour déclencher la
     détection depuis la langue système dans ce cas précis.
-  - `load_last_report_dir()`/`save_last_report_dir()` et
-    `load_last_pdf_dir()`/`save_last_pdf_dir()` : dernier dossier utilisé
-    respectivement pour une fiche et pour un export PDF (mémorisés
+  - `load_last_report_dir()`/`save_last_report_dir()`,
+    `load_last_pdf_dir()`/`save_last_pdf_dir()`,
+    `load_last_cover_dir()`/`save_last_cover_dir()` et
+    `load_last_book_dir()`/`save_last_book_dir()` : dernier dossier utilisé
+    respectivement pour une fiche, un export PDF, le choix manuel d'une image
+    de couverture et le sélecteur de fichier de la zone de dépôt (mémorisés
     séparément), sous la clé `"last_dirs"` de `settings.json`. Un dossier
-    mémorisé qui n'existe plus (supprimé, périphérique amovible
-    débranché...) est traité comme absent (`None`), sans jamais lever
-    d'erreur. Consommé par `main_window._default_save_dir()` (fiche) et
-    `_default_pdf_dir()` (PDF), qui gardent la priorité au dossier de la
-    fiche actuellement ouverte si elle en a un ; le dossier est mémorisé à
-    chaque sauvegarde/chargement réussi, pas seulement au premier usage.
+    mémorisé qui n'existe plus (supprimé, périphérique amovible débranché...)
+    est traité comme absent (`None`), sans jamais lever d'erreur. Consommé par
+    `main_window._default_save_dir()` (fiche), `_default_pdf_dir()` (PDF),
+    `_on_set_cover_manually()` (couverture) et `DropZone.mousePressEvent()`
+    (zone de dépôt) ; les deux premiers gardent la priorité au dossier de la
+    fiche actuellement ouverte si elle en a un. Le dossier est mémorisé à
+    chaque sauvegarde/chargement/choix réussi, pas seulement au premier
+    usage.
   - `_merge_legacy_settings_files()` (appelée par `migrate_legacy_files()`,
     y compris en développement contrairement au reste de cette fonction,
     ces anciens fichiers vivant déjà dans `%APPDATA%\Distillat` dans les deux
@@ -93,6 +164,76 @@ sauvegarde JSON et/ou export PDF.
     depuis la corbeille Windows (changement du 2026-07-21, qui s'applique
     à toute suppression de fichier faite par l'application ; voir aussi
     `generation_resume.clear_resume_state()`).
+
+- **`app/instance_lock.py`** (ajouté le 2026-07-22) : verrou par profil de
+  clé API, pour permettre de lancer plusieurs instances de Distillat en
+  parallèle (une clé différente chacune, usage régulier prévu par
+  l'utilisateur) sans qu'une instance réutilise par erreur un profil déjà
+  actif ailleurs. Un fichier `.profile_lock_<id_profil>.json` (dossier
+  `config.get_settings_dir()`) contient le PID du processus qui détient le
+  verrou, sa date de création (`psutil.Process.create_time()`) et le nom de
+  la machine (contenu commun avec les marqueurs d'instance, voir
+  `_owner_content()`). `acquire_profile_lock(profile_id)` réussit si le
+  fichier est absent, ou si son propriétaire n'est plus vivant
+  (`_owner_is_alive()`, basé sur psutil - un simple `os.kill(pid, 0)` n'est
+  pas fiable sous Windows contrairement à Unix - détecte ainsi un verrou
+  orphelin laissé par une instance qui aurait planté sans le libérer
+  proprement, avec deux précautions ajoutées à l'audit du 2026-07-22 : un
+  PID réutilisé par Windows pour un processus étranger est démasqué par la
+  comparaison des dates de création, plutôt que de laisser le profil marqué
+  "utilisé" indéfiniment ; et un fichier venant d'une autre machine -
+  hostname différent, cas d'un %APPDATA% itinérant partagé - est considéré
+  comme détenu, faute de pouvoir vérifier un processus distant) ; échoue
+  sans écraser le verrou si un autre processus vivant le détient déjà. La
+  création du fichier de verrou est atomique (`os.O_CREAT | os.O_EXCL`,
+  avec boucle de relecture si une autre instance gagne la course - audit du
+  2026-07-22) : l'ancien enchaînement lire-vérifier-écrire laissait deux
+  instances lancées simultanément lire toutes deux "verrou absent" puis
+  s'attribuer toutes deux le même profil, donc la même clé API et le même
+  fichier de quota. `acquire_profile_lock()` échoue aussi (False) si le
+  fichier de verrou ne peut pas être réellement écrit sur disque, plutôt
+  que de retourner une fausse possession invisible des autres instances.
+  `release_profile_lock(profile_id)` ne
+  supprime le verrou que s'il appartient bien au processus courant, pour ne
+  jamais effacer par erreur celui d'une autre instance qui l'aurait
+  entre-temps repris après un crash de la nôtre. `is_profile_locked_elsewhere(profile_id)`
+  (ajoutée à l'audit du 2026-07-22) est une simple lecture, sans jamais
+  prendre ni relâcher de verrou par effet de bord : utilisée par
+  `ProfilesDialog._reload_list()` pour le seul affichage du suffixe "utilisé
+  par une autre fenêtre" dans la liste, qui appelait auparavant
+  `acquire_profile_lock()`/`release_profile_lock()` par commodité - un
+  acquire/release réel, même bref, pouvait perturber une autre instance en
+  train de résoudre son propre profil au même instant via
+  `_resolve_active_profile()` ci-dessous (lui faisant croire à tort que le
+  profil venait d'être libéré puis repris). `acquire_profile_lock()` reste
+  utilisé par `main_window.MainWindow._resolve_active_profile()` (attribution
+  automatique du premier profil libre au démarrage, parcouru dans l'ordre de
+  `config.list_profiles()`) et par `ProfilesDialog` pour les actions qui
+  agissent réellement sur un profil (Modifier/Supprimer/Utiliser), et libéré
+  dans `MainWindow.closeEvent()`.
+
+  Mécanisme distinct (ajouté le 2026-07-22 avec le bouton "nouvelle
+  instance" du header de `MainWindow`, à droite du titre) : comptage des
+  instances Distillat vivantes, indépendant du profil - une instance sans
+  profil actif (aucun profil libre, ou aucun profil encore créé) ne détient
+  aucun verrou de profil, donc serait invisible à un comptage basé
+  uniquement sur `acquire_profile_lock()`. Un fichier `.instance_<pid>.json`
+  par instance (`register_instance()`, appelée dans `MainWindow.__init__()`
+  juste après la construction de `quota_tracker` ; `unregister_instance()`,
+  appelée dans `closeEvent()`) contient les mêmes informations de
+  propriétaire que les verrous de profil (PID, date de création, machine).
+  `count_alive_instances()` parcourt tous ces fichiers, ne compte que ceux
+  dont le propriétaire est vivant (même `_owner_is_alive()` que ci-dessus,
+  donc robuste lui aussi à la réutilisation d'un PID), et supprime
+  au passage les marqueurs orphelins trouvés (instance qui a planté sans se
+  désinscrire) plutôt que de les laisser s'accumuler indéfiniment - même
+  esprit que `gemini_client._trim_api_requests_log()`. `MAX_INSTANCES = 4`
+  (plafond fixe, pas un réglage utilisateur) : vérifié par
+  `MainWindow._on_new_instance_clicked()` avant de lancer un nouveau
+  processus, avec un message si la limite est atteinte ; ce n'est pas une
+  contrainte de ressource par compte Google comme pour les profils, juste un
+  plafond d'ergonomie pour ne pas se retrouver avec un nombre de fenêtres
+  difficilement gérable à l'écran.
 
 - **`app/i18n.py`** : internationalisation (français/anglais). Traductions
   chargées depuis `locales/fr.json`/`locales/en.json` (clés imbriquées par
@@ -112,15 +253,34 @@ sauvegarde JSON et/ou export PDF.
 
 - **`app/epub_parser.py`** : extrait texte + table des matières d'un EPUB via
   `ebooklib`/`BeautifulSoup`. Découpe par chapitre (titre pris dans la TOC, ou
-  un titre de repli traduit à défaut) ; extrait la couverture (plusieurs
-  stratégies de repli, beaucoup d'EPUB ne la taguent pas proprement). Retourne
+  un titre de repli traduit à défaut) ; extrait la couverture. Retourne
   un `BookContent` (titre, auteur, texte intégral, liste de `Chapter`,
-  couverture). `read_epub()` passe explicitement `options={"ignore_ncx":
+  couverture). `_check_uncompressed_size()` (appelée en tout premier par
+  `parse_epub()`, ajoutée à l'audit de sécurité du 2026-07-22) lit uniquement
+  le répertoire central du zip (aucune décompression, coût quasi nul) et
+  refuse avec un message traduit tout EPUB dont la somme des tailles
+  décompressées déclarées dépasse `_MAX_UNCOMPRESSED_EPUB_BYTES` (500 Mo,
+  très au-dessus de tout livre légitime) : sans ce plafond, une "bombe zip"
+  (fichier minuscule sur disque, gigantesque décompressé) épuisait la mémoire,
+  `ebooklib` chargeant tout le contenu en mémoire. Le contrôle est fiable
+  (zipfile, utilisé par `ebooklib`, refuse de lire au-delà de la taille
+  déclarée d'une entrée : mentir sur les tailles ne le contourne pas), et un
+  fichier illisible ou qui n'est pas un vrai zip est laissé passer tel quel,
+  `read_epub()` levant alors sa propre erreur comme avant. `read_epub()` passe explicitement `options={"ignore_ncx":
   False}` pour continuer à s'appuyer sur le NCX (table des matières EPUB2)
   même sur les versions récentes d'`ebooklib` (0.20+) où ce comportement n'est
   plus le défaut ; à ne pas retirer sans vérifier que la table des matières
   reste correctement extraite sur des EPUB2 legacy n'ayant pas de Navigation
   Document EPUB3.
+  `_find_cover_image_bytes()` (beaucoup d'EPUB ne taguent pas proprement leur
+  couverture) essaie dans l'ordre : type `ITEM_COVER`, métadonnée OPF
+  `<meta name="cover">`, nom/id d'image contenant "cover", puis en dernier
+  repli nom d'image commençant par "fc" ou contenant "front" (convention
+  "front cover"/"rear cover" rencontrée sur certains EPUB, ex. constaté le
+  2026-07-22 sur un EPUB nommant ses images `fc_750px.jpg`/`rc_750px.jpg` sans
+  aucune des 3 premières stratégies applicable). Si les 4 échouent, la fiche
+  reste sans couverture automatique mais l'utilisateur peut en définir une
+  manuellement depuis l'UI (voir `main_window.py` ci-dessous).
 
 - **`app/pdf_parser.py`** : extrait le texte d'un PDF via `pypdf`, page par
   page ; les PDF n'ayant pas de structure de chapitres fiable, le texte est
@@ -150,7 +310,8 @@ sauvegarde JSON et/ou export PDF.
     `config=` de chaque appel de génération (`_JSON_GENERATION_CONFIG`), pas
     un modèle séparé comme avec l'ancien SDK.
   - `generate_book_report()` est le point d'entrée : compte les tokens du
-    texte intégral, puis deux cas stricts, sans autre cas intermédiaire :
+    texte intégral, puis deux cas selon ce compte, plus un repli particulier
+    au sein du second (voir plus bas) :
     - **Texte tient dans `MAX_TOKENS_PER_REQUEST` (200k)** : un seul appel
       combiné demandant résumé court + détaillé + personnages + analyse en
       JSON (`_full_report_prompt`, prompt par défaut `full_report`).
@@ -170,6 +331,29 @@ sauvegarde JSON et/ou export PDF.
       personnages/analyse : cette simplification est volontaire, voir
       l'historique de conversation du 2026-07-19 si une réintroduction de
       complexité est envisagée.
+      - **Repli si un seul lot** : `count_tokens(full_text)` (mesuré en bloc,
+        décide du cas ci-dessus) et la somme des `count_tokens(chapter.text)`
+        (mesurée chapitre par chapitre par `_split_chapters_into_batches()`)
+        peuvent diverger légèrement selon le découpage soumis au tokenizer,
+        pour un même texte au caractère près (`full_text` n'est que la
+        concaténation des `chapter.text`, voir `epub_parser.parse_epub()`).
+        Un livre tout juste au-dessus de 200k tokens en comptage bloc peut
+        donc voir ses chapitres tenir malgré tout en un seul lot une fois
+        comptés séparément puis additionnés. Si `_split_chapters_into_batches()`
+        ne produit qu'un seul lot **et** qu'aucune reprise n'est en cours
+        (`resume_chapter_summaries` vide - une reprise implique
+        `batches_total >= 2`, voir plus bas, donc ce cas ne peut de toute
+        façon pas coexister avec un lot unique), `generate_book_report()`
+        traite ce lot comme le cas "une seule requête" ci-dessus
+        (`_full_report_prompt` sur `full_text`) plutôt que d'enchaîner
+        résumé-de-lot puis consolidation séparée : même texte envoyé au
+        final, une requête Gemini économisée. Aucun risque de dépassement
+        TPM introduit par ce repli : `MAX_TOKENS_PER_REQUEST` (200k) garde
+        déjà 50k tokens de marge sous la vraie limite TPM (250k), largement
+        suffisante pour couvrir l'écart de comptage et les instructions
+        ajoutées par `_full_report_prompt`. Décidé en conversation le
+        2026-07-22 suite à un livre affichant "lot de chapitres 1/1" dans
+        l'UI - comportement correct mais déroutant sans cette explication.
     - **`MAX_TOKENS_PER_REQUEST` (200k) vs `MAX_INPUT_TOKENS` (900k)** : ne
       pas confondre les deux (bug corrigé le 2026-07-19). `MAX_INPUT_TOKENS`
       documente la fenêtre de contexte du modèle (limite haute, rarement
@@ -276,7 +460,16 @@ sauvegarde JSON et/ou export PDF.
     diagnostiquer un écart inexpliqué entre le compteur local de requêtes
     quotidiennes et celui du dashboard AI Studio) : chaque appel réseau à
     Gemini écrit une ligne horodatée (ISO, en append, jamais écrasé) dans
-    `debug_logs/api_requests.log`. Événements consignés : paires
+    `debug_logs/api_requests.log`, préfixée par `pid=<PID>` juste après le
+    timestamp (ajouté le 2026-07-22, support multi-instances) : ce fichier
+    est partagé par toutes les instances de Distillat lancées sur la machine
+    (`get_debug_logs_dir()` est unique, indépendant du mode de lancement,
+    voir règle 8 de `CLAUDE.md`), leurs lignes s'entrelacent donc
+    chronologiquement si plusieurs tournent en parallèle (usage prévu, voir
+    `app/instance_lock.py`) ; ce préfixe, ajouté une seule fois dans
+    `_log_api_call()` (donc sur chaque ligne sans avoir à modifier chacun des
+    appelants), permet de filtrer après coup les lignes d'une seule instance
+    (`grep "pid=12345"`). Événements consignés : paires
     `ENVOI`/`OK` (ou `ECHEC` avec le type d'exception) de chaque
     `generate_content` avec contexte (`full_report`,
     `chapter_summary_batch_i/N`, `consolidation`), tokens, durée et compteur
@@ -284,7 +477,10 @@ sauvegarde JSON et/ou export PDF.
     `texte_integral`, `decoupage_chapitre_i/N` ou `consolidation`) ;
     `generation DEBUT`/`MODE`/`FIN`/`ECHEC` (marqueurs écrits par
     `generate_book_report()`, devenu une enveloppe de journalisation autour
-    de `_generate_book_report_impl()` qui porte la logique) avec l'info de
+    de `_generate_book_report_impl()` qui porte la logique) avec le numéro de
+    version de l'application (`app.__version__.VERSION`, ajouté le
+    2026-07-22 sur la ligne `generation DEBUT` - déjà présent par ailleurs sur
+    `application DEMARRAGE`, voir plus bas), l'info de
     reprise, le mode retenu (`une_seule_requete` ou `decoupage_en_lots` avec
     `requetes_generation_attendues`) et les totaux `_api_call_totals`
     (appels de génération et de comptage séparés, plus le cumul
@@ -293,10 +489,13 @@ sauvegarde JSON et/ou export PDF.
     `reponse_illisible` (écrit par `_log_unparsable_response()`, avec le nom
     du fichier de réponse brute correspondant) ; et `application DEMARRAGE`
     (écrit par `main_window` via le point d'entrée public `log_api_event()`,
-    avec version, pid, nom de machine (`platform.node()`, pour attribuer son
-    origine à un log recueilli sur un autre PC) et compteur quotidien
-    rechargé - deux DEMARRAGE à pid différents sans fermeture entre eux
-    signalent deux instances simultanées). Jamais le contenu des prompts ni des réponses (volumineux
+    avec version, nom de machine (`platform.node()`, pour attribuer son
+    origine à un log recueilli sur un autre PC), nom du profil de clé API
+    attribué à cette instance par `_resolve_active_profile()` (`"(aucun)"` si
+    aucun profil n'a pu être attribué) et compteur quotidien rechargé - le
+    pid, qui distingue déjà deux instances via le préfixe systématique décrit
+    plus haut, n'a plus besoin d'être répété dans le message lui-même depuis
+    le 2026-07-22). Jamais le contenu des prompts ni des réponses (volumineux
     et dérivé du livre traité, donc plus sensible que des métadonnées).
     Écriture best-effort (`except OSError: pass`) : ne doit jamais faire
     échouer un appel ni une génération. Purgé par `_trim_api_requests_log()`
@@ -345,7 +544,16 @@ sauvegarde JSON et/ou export PDF.
     si `_looks_like_stutter()` le reconnaît comme un bégaiement du texte qui
     le précède ; contrairement à la coupe par la fin, un bloc refusé
     n'interrompt pas la recherche (il signifie seulement que ce n'était pas le
-    bon emplacement). Dans les deux variantes, le texte de bégaiement retiré
+    bon emplacement). `_looks_like_stutter()` exige normalement que chaque
+    mot du texte retiré se retrouve tel quel dans la fin du texte accepté,
+    sauf en dessous de `_STUTTER_SHORT_FRAGMENT_LENGTH` (25 caractères
+    normalisés) où le fragment est accepté sans cette correspondance
+    mot-à-mot : ajouté le 2026-07-22 après un cas où Gemini avait coupé un
+    mot en plein milieu dans son bégaiement (`"anation culturelle."` pour la
+    fin de `"...profanation scientifique."`,
+    `gemini_unparsable_consolidation_20260722_100958_322453.txt`), un mot
+    tronqué ne pouvant par nature jamais se retrouver tel quel dans le texte
+    déjà accepté. Dans les deux variantes, le texte de bégaiement retiré
     est renvoyé comme `leftover` (donc conservé dans
     `BookReport.extra_generated_text`, jamais jeté silencieusement). Si même
     ces réparations échouent, `_log_unparsable_response()`
@@ -364,6 +572,28 @@ sauvegarde JSON et/ou export PDF.
     triés par date de modification, et seuls les `UNPARSABLE_LOGS_MAX_FILES`
     (5) plus récents sont conservés, les plus anciens étant supprimés
     (`unlink(missing_ok=True)`, best-effort comme le reste).
+  - `_call_gemini()` renvoie désormais un tuple `(text, finish_reason)` (et
+    non plus seulement `text`), `finish_reason` étant celui du premier
+    candidat (`response.candidates[0].finish_reason`, `None` si aucun
+    candidat). Il est systématiquement journalisé dans `api_requests.log` sur
+    la ligne `generate_content OK`, même quand `text` est exploitable (donc
+    même en dehors du cas `if not text` qui gérait déjà le blocage par
+    filtres de sécurité) : ajouté le 2026-07-22 après un cas
+    (`gemini_unparsable_consolidation_20260722_110125_965039.txt`) où la
+    réponse de consolidation s'arrêtait net après la valeur de `"analysis"`
+    (aucune accolade fermante, aucun contenu superflu - donc ni un cas géré
+    par `_try_repair_stuttered_json()`, ni un simple contenu superflu géré par
+    `raw_decode()`), sans qu'aucune trace de `finish_reason` n'ait été
+    conservée pour confirmer une troncature par `MAX_TOKENS` : seule l'erreur
+    générique de parsing JSON était visible a posteriori. `finish_reason` est
+    transmis à `_parse_json_object()` (et par elle à
+    `_parse_full_report_json()`/`_parse_chapter_summaries_batch_json()`, qui
+    le reçoivent aussi en paramètre) : si le parsing direct ET les deux
+    réparations de bégaiement échouent, et que `finish_reason == "MAX_TOKENS"`,
+    le message d'erreur dédié `gemini_errors.truncated_response` est levé
+    (réponse coupée par la limite de longueur du modèle) au lieu du message
+    générique `gemini_errors.unreadable_response` - qui reste utilisé pour
+    tout échec de parsing sans cette confirmation.
   - `_normalize_dashes()` : remplace systématiquement les tirets cadratin/
     demi-cadratin produits par Gemini par un tiret simple.
   - `default_prompt_templates()` (3 clés : `full_report`, `chapter_summary`,
@@ -388,26 +618,66 @@ sauvegarde JSON et/ou export PDF.
     rester cohérent avec celui annoncé dans le prompt de résumé de lot.
 
 - **`app/prompts_store.py`** : persistance des prompts personnalisés sous la
-  clé `"prompts"` de `settings.json` (via `config.load_settings()`/
-  `save_settings()`), imbriqués par langue (`{"fr": {...}, "en": {...}}`) :
-  personnaliser un prompt dans une langue ne doit jamais affecter l'autre,
-  sous peine de mélanger un texte français et une consigne de sortie
-  anglaise (ou l'inverse) dès que l'utilisateur change la langue de l'UI
-  (bug vécu le 2026-07-20, avant cette séparation par langue). Un ancien
-  stockage à plat (format antérieur à l'introduction du bilinguisme, avant
-  même l'existence de `settings.json`) est migré silencieusement vers le
+  clé `"prompts_by_profile"` de `settings.json` (lectures via
+  `config.load_settings()`, écritures via `config.update_settings()` -
+  relecture et fusion sous le verrou inter-processus de settings.json depuis
+  l'audit du 2026-07-22, pour ne jamais écraser les personnalisations
+  sauvées au même moment par une autre instance pour un autre profil),
+  imbriqués par profil de clé API PUIS par langue
+  (`{"<id_profil>": {"fr": {...}, "en": {...}}, ...}`, 2026-07-22, support des
+  profils multiples) : personnaliser un prompt pour un profil ne doit jamais
+  affecter un autre profil, et dans un profil donné, personnaliser un prompt
+  dans une langue ne doit jamais affecter l'autre, sous peine de mélanger un
+  texte français et une consigne de sortie anglaise (ou l'inverse) dès que
+  l'utilisateur change la langue de l'UI (bug vécu le 2026-07-20, avant cette
+  séparation par langue - le même risque existerait entre profils sans la
+  séparation ajoutée le 2026-07-22). `load_custom_prompts(language,
+  profile_id)`/`save_custom_prompts(language, prompts, profile_id)`/
+  `reset_custom_prompt(language, key, profile_id)` prennent désormais toutes
+  un `profile_id` obligatoire (résolu par l'appelant depuis
+  `MainWindow.active_profile`, jamais `None` en pratique puisqu'une fenêtre
+  Prompts ne s'ouvre que si un profil est actif, voir `main_window.py`
+  ci-dessous) ; `gemini_client._get_prompt_template()` accepte `profile_id:
+  str | None` et se rabat sur les prompts par défaut si `None` (ne devrait
+  pas arriver en production, une génération exigeant déjà une clé API donc un
+  profil résolu). `_migrate_legacy_global_prompts_to_profile(profile_id)`
+  reprend l'ancienne personnalisation globale (stockée sous l'ancienne clé
+  `"prompts"`, avant l'introduction des profils multiples) dans le PREMIER
+  profil qui la consulte ou la modifie (typiquement le profil "Défaut" issu
+  de la migration de la clé API unique, voir
+  `config._migrate_legacy_api_key_to_profile()`), puis VIDE aussitôt
+  l'ancienne clé `"prompts"` globale (`save_settings({"prompts_by_profile":
+  ..., "prompts": {}})`) : cette migration ne doit s'appliquer qu'une seule
+  fois tous profils confondus, jamais par profil - la vider empêche qu'un
+  second profil, consulté après le premier mais lui non plus jamais encore
+  présent dans `"prompts_by_profile"`, hérite à tort de la même donnée
+  globale que le premier (bug constaté et corrigé le 2026-07-22 pendant les
+  tests de ce chantier : sans le vidage, deux profils distincts se
+  retrouvaient avec exactement la même personnalisation "héritée"). Un ancien
+  stockage à
+  plat par langue (format antérieur à l'introduction du bilinguisme, avant
+  même l'existence de `settings.json`) reste migré silencieusement vers le
   français (`_LEGACY_FORMAT_LANGUAGE`, seule langue de l'application à cette
-  époque) à la première lecture - ce cas peut se présenter après la fusion
-  d'un ancien `prompts.json` à plat par `config._merge_legacy_settings_files()`,
-  qui ne connaît pas la structure interne des prompts et le recopie tel quel.
-  Une clé absente pour une langue donnée signifie "utiliser le prompt par
-  défaut de cette langue". `PROMPT_KEYS` doit rester synchronisé avec les
-  clés de `default_prompt_templates()`. `load_custom_prompts(language)`/
-  `save_custom_prompts(language, prompts)` ne prennent plus de paramètre
-  `settings_dir` (retiré le 2026-07-20 en même temps que la fusion : devenu
-  un paramètre mort, ces fonctions résolvent leur propre chemin via
-  `app.config`) - à conserver au fil des futures modifications, ne pas le
-  réintroduire par réflexe de compatibilité avec une ancienne signature.
+  époque) à la première lecture, désormais à l'intérieur des données d'un
+  profil plutôt qu'à la racine. Une clé absente pour une langue donnée
+  signifie "utiliser le prompt par défaut de cette langue". `PROMPT_KEYS` doit
+  rester synchronisé avec les clés de `default_prompt_templates()`.
+  `save_custom_prompts()` compare chaque prompt reçu au défaut actuel
+  (`gemini_client.default_prompt_templates()`, importé localement dans la
+  fonction pour éviter un import circulaire avec `gemini_client.py`, qui
+  importe déjà `prompts_store`) et n'écrit sur disque que les valeurs qui en
+  diffèrent réellement : bug corrigé le 2026-07-22, valider la fenêtre
+  "Prompts" (`PromptsDialog`) sans avoir rien modifié gravait auparavant une
+  copie complète et figée des 3 prompts par défaut du moment, qui divergeait
+  ensuite silencieusement de tout futur changement de ces prompts par défaut
+  dans le code (`load_custom_prompts()` préfère toujours la version sur
+  disque). `reset_custom_prompt()` efface immédiatement et définitivement, sur
+  disque, la personnalisation d'un seul prompt/langue/profil (sans toucher aux
+  deux autres clés, à l'autre langue, ni à un autre profil) : appelée par le
+  bouton "Réinitialiser ce prompt" de `PromptsDialog`, indépendamment du
+  bouton Sauvegarder/Annuler de la fenêtre - un reset est une action
+  immédiate et permanente, pas une simple modification du texte affiché en
+  attente de validation.
 
 - **`app/generation_resume.py`** (`ResumeState`) : persistance de l'état
   intermédiaire d'une génération en lots interrompue par un échec partiel
@@ -436,10 +706,26 @@ sauvegarde JSON et/ou export PDF.
 - **`app/quota_tracker.py`** (`QuotaTracker`) : suivi *local* et *estimatif*
   des quotas Gemini (RPM/TPM sur fenêtre glissante de 60s, RPD persisté par
   date dans `.quota_state_<hash>.json`, un fichier par clé API - voir plus
-  bas). Les limites par défaut
-  (`DEFAULT_RPM/TPM/RPD_LIMIT`) sont ajustables par l'utilisateur via l'UI et
-  stockées dans `quota_limits.json`. Ne reflète que ce que *cette*
-  application a envoyé (faussé si la même clé est utilisée ailleurs).
+  bas). Les limites par défaut (`DEFAULT_RPM/TPM/RPD_LIMIT`) sont ajustables
+  par l'utilisateur via l'UI et stockées dans `quota_limits_<hash>.json`, un
+  fichier par clé API (`quota_limits_path_for_key()`, même principe que
+  `daily_state_path_for_key()`, 2026-07-22, support des profils multiples) :
+  deux comptes Google avec des paliers différents (gratuit standard,
+  payant...) peuvent ainsi avoir des limites configurées différemment, plutôt
+  que de partager un seul fichier global. `QuotaTracker.quota_limits_path`
+  (nouveau champ, `None` tant qu'aucune clé n'a encore été sélectionnée via
+  `switch_api_key()`) est rebasculé et migré (`_migrate_legacy_quota_limits_if_needed()`,
+  reprise une seule fois de l'ancien fichier unique `quota_limits.json` vers
+  la première clé qui l'utilise après cette mise à jour, même mécanisme que
+  `_migrate_legacy_daily_state_if_needed()`) à chaque appel à
+  `switch_api_key()`, en même temps que `daily_state_path`. `load_quota_limits(limits_path)`/
+  `save_quota_limits(limits_path, ...)` prennent désormais directement le
+  chemin du fichier concerné plutôt qu'un `settings_dir` + résolution
+  implicite : à l'appelant (`main_window._on_edit_quota_limits()`) d'utiliser
+  `quota_tracker.quota_limits_path`, `None` (donc aucune édition possible,
+  message dédié affiché) si aucun profil n'est encore actif dans cette
+  instance. Ne reflète que ce que *cette* application a envoyé (faussé si la
+  même clé est utilisée ailleurs).
   `record_call()` (thread worker) et `snapshot()`/`reload_limits()` (thread
   UI, dont un timer périodique) accèdent au même état : `_lock`
   (`threading.Lock`, non réentrant) protège toute méthode qui le touche -
@@ -536,7 +822,14 @@ sauvegarde JSON et/ou export PDF.
   Gemini, à la disposition de l'utilisateur via l'UI mais pas de la fiche.
   `from_json()`/`load()` ne réécrivent jamais le fichier source (même si la
   couverture est recompressée au passage, en mémoire uniquement) : une
-  simple lecture ne doit jamais modifier le fichier lu.
+  simple lecture ne doit jamais modifier le fichier lu. La couverture base64
+  d'une fiche chargée est plafonnée à `_MAX_COVER_B64_LENGTH` (20 millions de
+  caractères, soit ~15 Mo décodés - très au-dessus de toute couverture
+  légitime) avant décodage : au-delà, elle est ignorée et la fiche se charge
+  sans couverture plutôt que de décoder en mémoire le blob démesuré d'un
+  fichier `.distillat.json` piégé ou corrompu (audit de sécurité du
+  2026-07-22), même philosophie que `shrink_cover_image()` (une couverture
+  inutilisable ne fait jamais échouer le chargement).
   `sanitize_filename()` nettoie un titre de livre pour en faire un nom de
   fichier Windows valide, par exclusion (retire uniquement les caractères
   réellement interdits par Windows `< > : " / \ | ? *` et les caractères de
@@ -570,7 +863,51 @@ sauvegarde JSON et/ou export PDF.
     (Couverture, Résumé court, Résumé détaillé, Personnages, Analyse),
     affichage de quota en temps réel, chrono écoulé pendant la génération,
     bandeau de mise à jour disponible (`update_banner_label`, masqué par
-    défaut, voir `app/update_checker.py`).
+    défaut, voir `app/update_checker.py`), label du profil de clé API actif
+    (`active_profile_label`, à côté du bouton "Profils").
+  - `setMinimumSize(400, 300)` (appelé dans `__init__`, avant
+    `_size_to_available_screen()` qui dimensionne/positionne la fenêtre à
+    l'ouverture) : sans cet appel, Qt calcule automatiquement une taille
+    minimale à partir du contenu du layout (header, onglets...), assez
+    grande pour empêcher Windows Snap de réduire la fenêtre à 1/4 d'écran
+    sur certains moniteurs (constaté le 2026-07-22). Cette valeur volontai-
+    rement petite ne réorganise jamais le contenu du layout : en dessous de
+    sa taille confortable habituelle, le contenu peut se chevaucher ou être
+    partiellement coupé (comportement standard d'une fenêtre Qt redimen-
+    sionnée sous sa taille naturelle), et retrouve son affichage normal dès
+    qu'elle est réagrandie.
+  - `_resolve_active_profile()` (appelée dans `__init__`, juste après la
+    construction de `self.quota_tracker`) : attribue à cette instance le
+    premier profil de `config.list_profiles()` (dans l'ordre
+    d'enregistrement) dont `instance_lock.acquire_profile_lock()` réussit ET
+    dont la clé API est réellement lisible via keyring, bascule aussitôt
+    `quota_tracker.switch_api_key()` dessus. Un profil dont le verrou est
+    acquis mais dont la clé n'est pas lisible (Gestionnaire d'identification
+    Windows indisponible pour cette entrée précise) libère aussitôt son
+    verrou et cède la place au profil suivant plutôt que de rester
+    "actif" sans clé utilisable (corrigé à l'audit du 2026-07-22 : le garder
+    ainsi bloquait ce profil pour toute autre instance sans qu'aucune
+    génération ne soit possible avec lui depuis celle-ci). Si des profils
+    existent mais sont tous verrouillés par d'autres instances ou sans clé
+    lisible, `self.active_profile` reste `None` sans qu'aucun avertissement ne
+    s'affiche au démarrage (un `QMessageBox` ouvert dans `__init__()`, donc
+    avant `window.show()` dans `main.py`, apparaissait avant même la fenêtre
+    principale - déroutant, corrigé le 2026-07-22) : l'utilisateur en est
+    informé seulement s'il en a réellement besoin, via `ProfilesDialog`
+    (ouvert par `_ensure_api_key()` au clic sur "Résumer"), qui affiche déjà
+    quels profils sont occupés (`locked_suffix`). `closeEvent()` libère le
+    verrou du profil actif (`instance_lock.release_profile_lock()`) à la
+    fermeture propre de la fenêtre. L'appel `_ensure_api_key(prompt_if_missing=False)`
+    fait auparavant dans `__init__()` quand `self.active_profile` restait
+    `None` a été retiré (audit du 2026-07-22) : sans effet dans ce cas précis
+    (la fonction retourne immédiatement `None` sans aucun effet de bord),
+    c'était un appel mort.
+  - `_on_finished_ok()` (connectée à `SummarizeWorker.finished_ok`) joue un
+    petit son via `winsound.PlaySound(str(config.get_success_sound_path()),
+    winsound.SND_FILENAME | winsound.SND_ASYNC)` juste après l'affichage de la
+    fiche (`_display_book_report()`), pour signaler la fin de génération sans
+    devoir garder l'oeil sur l'application (ajouté le 2026-07-22). `SND_ASYNC`
+    pour ne pas bloquer l'UI le temps de la lecture.
   - `_on_language_changed()` (connecté à `currentIndexChanged` du sélecteur,
     APRÈS l'initialisation de l'index courant pour ne pas se déclencher à la
     construction) appelle `i18n.set_language()` + `config.save_language_setting()`
@@ -581,9 +918,85 @@ sauvegarde JSON et/ou export PDF.
     qui se retraduit de lui-même à sa prochaine mise à jour naturelle : un
     changement de langue à chaud, sans redémarrage, mais aussi sans le risque
     de régression d'un rebuild complet de `_build_ui()` en cours de session.
-  - Dialogues : `ApiKeyDialog`, `QuotaLimitsDialog`, `PromptsDialog` (un
+  - `_on_new_instance_clicked()` (bouton dans le header, à droite immédiate
+    du titre "Distillat" - ajouté le 2026-07-22) : lance une nouvelle
+    instance de Distillat via `subprocess.Popen()`, après vérification de
+    `instance_lock.count_alive_instances() < instance_lock.MAX_INSTANCES`
+    (message dédié si la limite est atteinte, sans lancer de processus).
+    Résolution du chemin selon le mode (`getattr(sys, "frozen", False)`,
+    même marqueur que partout ailleurs dans `app/config.py`) : en mode
+    compilé, `sys.executable` pointe déjà sur `Distillat.exe`
+    (`subprocess.Popen([sys.executable])`) ; en développement, il pointe sur
+    l'interpréteur Python du venv, à qui il faut passer le chemin de
+    `main.py` en argument (`config.get_app_dir() / "main.py"`, qui résout
+    déjà correctement la racine du projet en dev). Ne précise jamais `cwd=` :
+    `Popen` hérite du répertoire de travail du parent, et aucune fonction de
+    résolution de chemin du projet n'en dépend. Ne vérifie PAS au préalable
+    qu'un profil de clé API sera disponible pour la nouvelle instance : celle-
+    ci affichera elle-même l'avertissement déjà existant
+    (`_resolve_active_profile()`) si aucun profil n'est libre, pour ne pas
+    dupliquer cette logique ici - seul le nombre d'instances est vérifié en
+    amont, puisque ce n'est pas une ressource par compte Google mais un
+    simple plafond d'ergonomie.
+  - Dialogues : `ProfilesDialog` (gestion des profils de clé API - ajout,
+    renommage, modification de la clé, suppression, sélection du profil
+    actif de cette instance via le bouton "Utiliser" ; remplace l'ancien
+    `ApiKeyDialog` à clé unique depuis le support multi-instances du
+    2026-07-22, voir `app/instance_lock.py` et le paragraphe clé API de
+    `app/config.py` plus haut ; `ProfileEditDialog`, sous-dialogue
+    nom+clé, factorise le champ clé avec bouton oeil via `_ApiKeyInputRow`).
+    Utiliser/Modifier/Supprimer sont désactivés tant qu'aucun profil n'est
+    sélectionné dans `list_widget` (`_on_selection_changed()`, basé sur
+    `selectedItems()`, jamais `currentItem()`/`currentRowChanged` : bug
+    corrigé le 2026-07-22, ces derniers restaient positionnés sur le premier
+    profil même sans sélection utilisateur réelle - à l'ouverture parce que
+    `QListWidget` sélectionne automatiquement la première ligne dès qu'un
+    item y est ajouté, et ensuite parce qu'un clic dans une zone vide de
+    la liste ne change pas `currentRow`/`currentItem` par défaut - si bien
+    que les trois boutons restaient actifs et agissaient sur ce premier
+    profil sans que rien ne soit visiblement sélectionné). `_reload_list()`
+    force `clearSelection()` + `setCurrentRow(-1)` après chaque
+    remplissage ; `list_widget` est une `_DeselectableListWidget`
+    (`QListWidget` dont `mousePressEvent()` vide la sélection quand le clic
+    ne tombe sur aucun item) pour permettre explicitement à l'utilisateur de
+    revenir à "aucune sélection" après en avoir choisi une.
+    Quatre garde-fous avant qu'Ajouter/Modifier/Supprimer/Utiliser n'écrive
+    quoi que ce soit : (1) `config.find_profile_by_name()`/`find_profile_by_api_key()`
+    refusent un nom ou une clé déjà pris par un autre profil (message nommant
+    le profil déjà concerné) ; (2) `instance_lock.acquire_profile_lock()`
+    refuse d'agir sur un profil actuellement verrouillé par une autre
+    instance (sauf s'il s'agit du profil actif de cette instance-ci) - et le
+    verrou ainsi pris est conservé pendant toute la durée du sous-dialogue
+    d'édition ou de la confirmation de suppression, puis relâché dans un
+    `finally` (audit du 2026-07-22 : le relâcher aussitôt après le test
+    laissait une autre instance s'attribuer ce profil pendant que le
+    dialogue restait ouvert, la validation écrasant ou supprimant alors la
+    clé d'un profil devenu actif ailleurs) ; (3) le
+    paramètre `generation_in_progress` (calculé dans `_on_edit_api_key()` via
+    `self.worker is not None and self.worker.isRunning()`, transmis au
+    constructeur) refuse de modifier/supprimer le profil actif de cette
+    instance tant qu'une génération tourne avec lui ; (4) le même
+    `generation_in_progress` refuse aussi de changer de profil actif (bouton
+    "Utiliser") tant qu'une génération tourne (audit du 2026-07-22 : le
+    `switch_api_key()` immédiat aurait crédité les requêtes restantes de la
+    génération en cours au compteur du nouveau compte, et le verrou de
+    l'ancien profil aurait été libéré alors que sa clé restait activement
+    utilisée par le worker). Si la clé du profil choisi via "Utiliser" n'est
+    pas lisible (Gestionnaire d'identification Windows indisponible),
+    `active_profile` est quand même mis à jour vers ce profil (le choix de
+    l'utilisateur est respecté) mais `quota_tracker.switch_api_key()` n'est
+    pas appelé : le suivi de quota affiché reste sur son état actuel plutôt
+    que d'être signalé comme basculé sans que le compteur affiché ne
+    corresponde réellement au nouveau profil actif. Ajouter/Modifier/Supprimer écrivent la liste
+    des profils via `config.add_profile()`/`rename_profile()`/
+    `remove_profile()` (relecture et réécriture sous le verrou
+    inter-processus de settings.json, voir `app/config.py` ci-dessus),
+    jamais via un enchaînement `list_profiles()` + `save_profiles()` dans le
+    dialogue. `QuotaLimitsDialog`, `PromptsDialog` (un
     onglet par clé de `default_prompt_templates()`, un bouton de
-    réinitialisation par onglet, n'affecte que cet onglet - la police
+    réinitialisation par onglet, n'affecte que cet onglet et efface
+    immédiatement la personnalisation correspondante sur disque via
+    `prompts_store.reset_custom_prompt()`, voir plus haut - la police
     Courier New de chaque zone de saisie est fixée via
     `document().setDefaultFont()` + repaint forcé du viewport, pas seulement
     `setFont()`/`setFontFamily()` : sur certaines machines, l'affichage ne se
@@ -595,11 +1008,25 @@ sauvegarde JSON et/ou export PDF.
     compilation via `distillat.spec`), `QuotaHelpDialog` (texte statique fixe,
     sans jargon technique, expliquant le fonctionnement des quotas/requêtes
     Gemini au public non technique : ouverte via le bouton `?` placé à gauche
-    de `status_label`, ajouté le 2026-07-21). Ces quatre dialogues utilisent un
-    `QPushButton` construit à la main pour leur bouton Fermer/OK, traduit via
-    `tr()`, plutôt que `QDialogButtonBox.Close`/`.Ok` : ces boutons standards
-    Qt restent affichés en anglais même en français faute de `QTranslator` Qt
-    installé pour cette locale (bug constaté le 2026-07-21). `status_label`
+    de `status_label`, ajouté le 2026-07-21). Tous ces dialogues utilisent un
+    `QPushButton`/`QDialogButtonBox.addButton(tr(...), <Role>)` construit à la
+    main pour chacun de leurs boutons (Fermer/OK/Annuler/Sauvegarder/Réinitialiser),
+    traduit via `tr()`, plutôt que les rôles standard `QDialogButtonBox.Ok`/
+    `.Cancel`/`.Close`/etc. : ces boutons standards Qt restent affichés en
+    anglais même en français faute de `QTranslator` Qt installé pour cette
+    locale (bug constaté le 2026-07-21 sur Fermer/OK, puis à nouveau le
+    2026-07-22 sur `PromptsDialog.Cancel`, l'ancien `ApiKeyDialog.Ok/.Cancel` et
+    `QuotaLimitsDialog.Ok/.Cancel` : voir règle 3 de `CLAUDE.md`, interdiction
+    permanente des rôles standard `QDialogButtonBox` non traduits). Dans
+    `PromptsDialog`, le bouton "Sauvegarder" (`AcceptRole`) reste désactivé
+    tant qu'aucun onglet n'a un texte différent de son état initial (chargé à
+    l'ouverture, personnalisé ou par défaut) ; chaque bouton "Réinitialiser ce
+    prompt" reste désactivé tant que le texte affiché de son onglet égale
+    déjà le prompt par défaut actuel - suivi via `textChanged` sur chaque
+    `QTextEdit` (`_on_text_changed()`), et `_save_button`/les `QTextEdit` sont
+    construits avant la boucle sur les onglets pour que
+    `_on_text_changed()` (appelé dès la construction de chaque onglet) puisse
+    déjà s'appuyer dessus. `status_label`
     affiche désormais un texte de repos (`main_window.idle_status`) plutôt que
     de rester vide en l'absence de traitement en cours (auparavant vide, ce
     qui isolait visuellement ce bouton `?` sans texte à côté). Le footer de
@@ -656,6 +1083,17 @@ sauvegarde JSON et/ou export PDF.
     risquée pour le bénéfice) : ajouter/supprimer un paragraphe entier décale
     ce mappage positionnel et peut faire hériter un paragraphe du préfixe
     d'un titre voisin, ou l'inverse.
+  - `cover_label` (onglet Couverture) a un menu contextuel (clic droit,
+    `_on_cover_context_menu()`) proposant "Définir la couverture..."
+    (`_on_set_cover_manually()`), qu'une couverture ait déjà été trouvée
+    automatiquement ou non : ouvre un sélecteur de fichier (dossier initial
+    mémorisé séparément, voir `config.load_last_cover_dir()` ci-dessus), passe
+    l'image choisie par `cover_image.shrink_cover_image()` (même traitement
+    que les couvertures extraites automatiquement) et remplace
+    `last_result.cover_image`, marque `_report_dirty = True`. Ajouté le
+    2026-07-22 pour les livres dont l'extraction automatique échoue
+    (couverture non taguée proprement dans le fichier source, voir
+    `epub_parser.py` ci-dessus) sans devoir régénérer toute la fiche.
   - `_report_dirty` + `_confirm_discard_unsaved_report()` : protège contre la
     perte d'une fiche modifiée non sauvegardée (nouveau fichier, fermeture de
     fiche, fermeture de l'application). `_confirm_abort_running_generation()`
