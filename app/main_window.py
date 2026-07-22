@@ -50,7 +50,12 @@ from PyQt5.QtWidgets import (
 from app import config, generation_resume, i18n, instance_lock
 from app.__version__ import VERSION
 from app.i18n import tr
-from app.update_checker import check_for_updates_on_startup, releases_page_url, repo_page_url
+from app.update_checker import (
+    check_for_updates_on_startup,
+    project_site_url,
+    releases_page_url,
+    repo_page_url,
+)
 from app.book_report import BookReport, Character, sanitize_filename
 from app.cover_image import shrink_cover_image
 from app.gemini_client import MODEL_NAME, default_prompt_templates, log_api_event
@@ -1042,7 +1047,20 @@ class PendingResumesDialog(QDialog):
     """Liste au démarrage les livres dont une génération précédente s'est
     arrêtée en cours de route (voir generation_resume), pour proposer de
     reprendre l'un d'eux là où il en était plutôt que de reformuler depuis le
-    début les lots de chapitres déjà résumés avec succès."""
+    début les lots de chapitres déjà résumés avec succès. Les verrous de
+    livre (voir instance_lock) sont surveillés en direct par un timer : une
+    reprise démarrée entre-temps dans une autre instance est marquée "en
+    cours dans une autre fenêtre" et cesse d'être sélectionnable, et
+    inversement une reprise dont le verrou se libère (fin de génération
+    ailleurs, instance qui a planté) redevient sélectionnable sans avoir à
+    rouvrir ce dialogue."""
+
+    # Rôles de données portés par chaque entrée de la liste, en plus de
+    # l'état de reprise lui-même (Qt.UserRole) : le libellé hors mention de
+    # verrou (pour le reconstruire à chaque bascule) et le dernier état de
+    # verrou constaté (pour ne retoucher l'entrée que lorsqu'il change).
+    _BASE_LABEL_ROLE = Qt.UserRole + 1
+    _LOCKED_ROLE = Qt.UserRole + 2
 
     def __init__(self, states: list, parent=None):
         super().__init__(parent)
@@ -1073,6 +1091,8 @@ class PendingResumesDialog(QDialog):
                 label += " " + tr("pending_resumes_dialog.item_missing_suffix")
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, state)
+            item.setData(self._BASE_LABEL_ROLE, label)
+            item.setData(self._LOCKED_ROLE, False)
             if not book_exists:
                 item.setForeground(QColor("#b02a2a"))
             self.list_widget.addItem(item)
@@ -1107,20 +1127,63 @@ class PendingResumesDialog(QDialog):
         self.resume_button.setAutoDefault(False)
         self.close_button.setFocus()
 
+        self._locks_timer = QTimer(self)
+        self._locks_timer.setInterval(1000)
+        self._locks_timer.timeout.connect(self._refresh_locked_states)
+        self._locks_timer.start()
+        self._refresh_locked_states()
+
     def _current_state(self):
         item = self.list_widget.currentItem()
         if item is None:
             return None
         return item.data(Qt.UserRole)
 
+    def _refresh_locked_states(self) -> None:
+        """Relit l'état des verrous de livre (lecture seule, jamais de prise
+        de verrou par effet de bord, voir instance_lock.is_book_locked_elsewhere)
+        et ne retouche une entrée que si son état a réellement changé."""
+        for row in range(self.list_widget.count()):
+            item = self.list_widget.item(row)
+            state = item.data(Qt.UserRole)
+            locked = instance_lock.is_book_locked_elsewhere(state.book_hash)
+            if locked == bool(item.data(self._LOCKED_ROLE)):
+                continue
+            item.setData(self._LOCKED_ROLE, locked)
+            label = item.data(self._BASE_LABEL_ROLE)
+            if locked:
+                label += " " + tr("pending_resumes_dialog.item_locked_suffix")
+            item.setText(label)
+            if locked:
+                item.setForeground(QColor("#888888"))
+            elif not Path(state.book_path).exists():
+                item.setForeground(QColor("#b02a2a"))
+            else:
+                # Efface le rôle pour revenir à la couleur par défaut de la
+                # liste, plutôt que d'imposer un noir figé.
+                item.setData(Qt.ForegroundRole, None)
+        self._update_buttons()
+
     def _on_selection_changed(self, row: int) -> None:
+        self._update_buttons()
+
+    def _update_buttons(self) -> None:
         state = self._current_state()
-        self.delete_button.setEnabled(state is not None)
-        self.resume_button.setEnabled(state is not None and Path(state.book_path).exists())
+        item = self.list_widget.currentItem()
+        locked = item is not None and bool(item.data(self._LOCKED_ROLE))
+        self.delete_button.setEnabled(state is not None and not locked)
+        self.resume_button.setEnabled(
+            state is not None and not locked and Path(state.book_path).exists()
+        )
 
     def _on_delete_clicked(self) -> None:
         state = self._current_state()
         if state is None:
+            return
+        # Revérification synchrone : le timer d'une seconde peut ne pas avoir
+        # encore relevé un verrou tout juste posé par une autre instance.
+        if instance_lock.is_book_locked_elsewhere(state.book_hash):
+            self._refresh_locked_states()
             return
         self.states_to_clear.append(state)
         row = self.list_widget.currentRow()
@@ -1131,6 +1194,10 @@ class PendingResumesDialog(QDialog):
     def _on_resume_clicked(self) -> None:
         state = self._current_state()
         if state is None:
+            return
+        # Même revérification synchrone que pour la suppression ci-dessus.
+        if instance_lock.is_book_locked_elsewhere(state.book_hash):
+            self._refresh_locked_states()
             return
         self.selected_state = state
         self.accept()
@@ -1299,6 +1366,7 @@ class MainWindow(QMainWindow):
         self.source_code_link_button.setText(tr("main_window.source_code_link"))
         self.download_link_button.setText(tr("main_window.download_link"))
         self.changelog_link_button.setText(tr("main_window.changelog_link"))
+        self.project_site_link_button.setText(tr("main_window.project_site_link"))
         if not self.last_result:
             self.cover_label.setText(tr("main_window.no_cover"))
         self.summary_view.setPlaceholderText(tr("main_window.summary_placeholder"))
@@ -1546,6 +1614,12 @@ class MainWindow(QMainWindow):
         self.changelog_link_button.setStyleSheet(footer_link_style)
         self.changelog_link_button.clicked.connect(self._on_show_changelog)
         footer_row.addWidget(self.changelog_link_button)
+
+        self.project_site_link_button = QPushButton(tr("main_window.project_site_link"))
+        self.project_site_link_button.setCursor(Qt.PointingHandCursor)
+        self.project_site_link_button.setStyleSheet(footer_link_style)
+        self.project_site_link_button.clicked.connect(self._on_open_project_site)
+        footer_row.addWidget(self.project_site_link_button)
 
         layout.addLayout(footer_row)
 
@@ -1863,6 +1937,9 @@ class MainWindow(QMainWindow):
     def _on_open_repo_page(self) -> None:
         webbrowser.open(repo_page_url())
 
+    def _on_open_project_site(self) -> None:
+        webbrowser.open(project_site_url())
+
     def show_update_banner(self, latest_version: str) -> None:
         self._latest_version_available = latest_version
         self.update_banner_label.setText(tr("main_window.update_banner", version=latest_version))
@@ -2072,6 +2149,13 @@ class MainWindow(QMainWindow):
         # actif au moment de sa destruction.
         self.worker.terminate()
         self.worker.wait()
+        # terminate() court-circuite le finally de SummarizeWorker.run() :
+        # libérer ici le verrou de livre encore détenu, plutôt que de laisser
+        # aux autres instances un verrou que leur détection d'orphelin ne
+        # jugera mort qu'une fois ce processus complètement terminé.
+        if self.worker.locked_book_hash is not None:
+            instance_lock.release_book_lock(self.worker.locked_book_hash)
+            self.worker.locked_book_hash = None
         return True
 
     def closeEvent(self, event) -> None:
@@ -2121,6 +2205,20 @@ class MainWindow(QMainWindow):
         self.quota_tracker.switch_api_key(api_key)
 
         resume_state = self._find_resume_state_for(self.selected_book_path)
+
+        # Refus anticipé si une autre instance génère déjà ce livre, possible
+        # ici seulement quand un état de reprise fournit déjà le hash (pour
+        # une première génération, le hash n'est connu qu'après extraction :
+        # ce cas est couvert par le verrou pris dans SummarizeWorker.run()).
+        # Évite de vider inutilement la fiche affichée et les onglets
+        # ci-dessous pour une génération qui serait de toute façon refusée.
+        if resume_state is not None and instance_lock.is_book_locked_elsewhere(resume_state.book_hash):
+            QMessageBox.warning(
+                self,
+                tr("main_window.book_locked_title"),
+                tr("worker_errors.book_locked_elsewhere"),
+            )
+            return
 
         self._set_summarize_button_enabled(False)
         self.save_button.setEnabled(False)
@@ -2390,7 +2488,10 @@ class MainWindow(QMainWindow):
             self.quota_warning_label.setText(tr("main_window.quota_exceeded_warning"))
             self.quota_warning_label.show()
         resume_state = self._find_resume_state_for(self.selected_book_path)
-        if resume_state is not None:
+        # error_kind "book_locked" : la génération a été refusée parce qu'une
+        # autre instance traite déjà ce livre - suggérer de recliquer sur
+        # "Résumer" pour reprendre serait contradictoire avec ce refus.
+        if resume_state is not None and error_kind != "book_locked":
             if error_kind == "daily_quota":
                 wait_hint = tr("main_window.resume_wait_hint_daily")
             elif error_kind == "rate_quota":

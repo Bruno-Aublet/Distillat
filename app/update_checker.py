@@ -15,6 +15,7 @@ from app.__version__ import VERSION
 _RELEASES_API = "https://api.github.com/repos/Bruno-Aublet/Distillat/releases/latest"
 _RELEASES_PAGE = "https://github.com/Bruno-Aublet/Distillat/releases/latest"
 _REPO_PAGE = "https://github.com/Bruno-Aublet/Distillat"
+_PROJECT_SITE_PAGE = "https://bruno-aublet.github.io/Distillat/"
 _TIMEOUT = 5
 
 
@@ -81,3 +82,7 @@ def releases_page_url() -> str:
 
 def repo_page_url() -> str:
     return _REPO_PAGE
+
+
+def project_site_url() -> str:
+    return _PROJECT_SITE_PAGE

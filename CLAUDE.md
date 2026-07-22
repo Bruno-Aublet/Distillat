@@ -222,8 +222,9 @@ sauvegarde JSON et/ou export PDF.
 - **`app/config.py`** : emplacements de stockage persistants, profils de clé
   API nommés (keyring), `settings.json` (langue, prompts par profil, derniers
   dossiers), migration des anciens fichiers.
-- **`app/instance_lock.py`** : verrou par profil de clé API (fichier PID),
-  pour l'usage à plusieurs instances de Distillat en parallèle.
+- **`app/instance_lock.py`** : verrous inter-instances (fichiers PID) par
+  profil de clé API et par livre en cours de génération, pour l'usage à
+  plusieurs instances de Distillat en parallèle.
 - **`app/i18n.py`** : chargement des traductions, détection langue système,
   changement de langue à chaud.
 - **`app/epub_parser.py`** : extraction texte/TOC/couverture EPUB.

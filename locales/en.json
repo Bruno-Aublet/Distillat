@@ -51,6 +51,9 @@
   "worker_progress": {
     "reading_file": "Reading file…"
   },
+  "worker_errors": {
+    "book_locked_elsewhere": "This book is already being generated in another Distillat window. Wait for it to finish before starting this book again here."
+  },
   "language_selector": {
     "label": "Language:",
     "french": "Français",
@@ -174,6 +177,7 @@
     "intro": "One or more previous generations stopped before completion. Select a book below to resume its generation from where it stopped, or close this window to decide later (it will reappear on next startup as long as a book is still waiting).",
     "item_label": "{filename} - {batches_done}/{batches_total} chapter batch(es) summarized",
     "item_missing_suffix": "(file not found)",
+    "item_locked_suffix": "(in progress in another window)",
     "delete_button": "Delete",
     "close_button": "Close",
     "resume_button": "Resume selection"
@@ -207,6 +211,7 @@
     "source_code_link": "Source code",
     "download_link": "Download",
     "changelog_link": "Changelog",
+    "project_site_link": "Website",
     "no_cover": "No cover",
     "set_cover_action": "Set cover image...",
     "set_cover_dialog_title": "Choose a cover image",
@@ -244,6 +249,7 @@
     "resume_wait_hint_other": "This isn't a quota issue, it's probably a one-off generation glitch. You can try again right away, ",
     "resume_hint_suffix": "\n\nNothing is lost: the {batches_done}/{batches_total} chapter batch(es) already summarized successfully have been saved. {wait_hint}drag and drop this same EPUB/PDF file again and click \"Summarize\": Distillat will automatically recognize where processing had stopped and offer to resume from exactly that point, without redoing work already done.",
     "error_title": "Error",
+    "book_locked_title": "Generation already in progress",
     "save_pdf_dialog_title": "Save the summary",
     "save_pdf_filter": "PDF documents (*.pdf)",
     "save_success_title": "Save successful",

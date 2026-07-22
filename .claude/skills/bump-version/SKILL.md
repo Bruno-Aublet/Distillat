@@ -1,6 +1,6 @@
 ---
 name: bump-version
-description: Procédure pour bumper le numéro de version de Distillat (app/__version__.py, version_info.txt, CHANGELOG.md, README.md). À utiliser uniquement sur demande explicite et précise du numéro cible (voir règle 1 de CLAUDE.md, ne jamais bumper de sa propre initiative).
+description: Procédure pour bumper le numéro de version de Distillat (app/__version__.py, version_info.txt, CHANGELOG.md, README.md, index.html). À utiliser uniquement sur demande explicite et précise du numéro cible (voir règle 1 de CLAUDE.md, ne jamais bumper de sa propre initiative).
 ---
 
 # Bumper le numéro de version de Distillat
@@ -36,5 +36,9 @@ Uniquement sur demande explicite et précise du numéro cible (règle 1 de
      reste sur une seule ligne physique dans le fichier source, aussi longue
      soit-elle.
 4. **`README.md`** : `**Version x.y.z**` (près du haut du fichier).
-5. Vérifier qu'aucune autre mention de l'ancien numéro ne subsiste ailleurs
+5. **`index.html`** (landing page du projet, hébergée via GitHub Pages) :
+   chaîne `version: 'vx.y.z · ...'`, présente en double dans le bundle - une
+   fois dans le dictionnaire `fr`, une fois dans le dictionnaire `en` - à
+   mettre à jour dans les deux.
+6. Vérifier qu'aucune autre mention de l'ancien numéro ne subsiste ailleurs
    dans le projet avant de considérer le bump terminé.

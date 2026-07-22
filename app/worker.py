@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from app import config, epub_parser, gemini_client, generation_resume, pdf_parser
+from app import config, epub_parser, gemini_client, generation_resume, instance_lock, pdf_parser
 from app.book_report import BookReport
 from app.epub_parser import BookContent
 from app.gemini_client import GeminiError, PartialGenerationError
@@ -44,6 +44,12 @@ class SummarizeWorker(QThread):
         self.quota_tracker = quota_tracker
         self.profile_id = profile_id
         self.resume_state = resume_state
+        # Hash du livre dont ce worker détient actuellement le verrou de
+        # génération (voir instance_lock.acquire_book_lock), None sinon. Lu
+        # par main_window après un terminate() (fermeture de la fenêtre en
+        # cours de génération), qui court-circuite le finally de run() : le
+        # verrou encore détenu est alors libéré depuis le thread UI.
+        self.locked_book_hash: str | None = None
 
     def run(self) -> None:
         settings_dir = config.get_settings_dir()
@@ -60,6 +66,17 @@ class SummarizeWorker(QThread):
                 self.quota_updated.emit(snapshot)
 
             book_hash = generation_resume.compute_book_hash(content.full_text)
+
+            # Une autre instance de Distillat génère peut-être déjà ce même
+            # livre (première génération ou reprise du même état interrompu) :
+            # refuser avant tout appel à Gemini, sinon chaque instance
+            # consommerait du quota pour produire la même fiche et, en cas de
+            # nouvel échec partiel, écraserait tour à tour le même fichier de
+            # reprise avec sa propre progression.
+            if not instance_lock.acquire_book_lock(book_hash):
+                self.failed.emit(tr("worker_errors.book_locked_elsewhere"), "book_locked")
+                return
+            self.locked_book_hash = book_hash
 
             resume_summaries = None
             resume_batches_done = 0
@@ -94,3 +111,11 @@ class SummarizeWorker(QThread):
             self.failed.emit(str(exc), exc.error_kind)
         except Exception as exc:  # noqa: BLE001 - on veut afficher toute erreur à l'utilisateur
             self.failed.emit(str(exc), None)
+        finally:
+            # Libéré après la sauvegarde éventuelle de l'état de reprise
+            # ci-dessus : une autre instance qui reprend ce livre lit alors un
+            # état déjà à jour. Jamais atteint après un terminate() (fermeture
+            # de la fenêtre), cas couvert par main_window via locked_book_hash.
+            if self.locked_book_hash is not None:
+                instance_lock.release_book_lock(self.locked_book_hash)
+                self.locked_book_hash = None

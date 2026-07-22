@@ -1,12 +1,19 @@
-"""Verrou par profil de clé API, pour qu'une instance de Distillat sache si un
-profil donné est déjà utilisé par une autre instance en cours d'exécution sur
-la même machine (usage prévu : plusieurs instances lancées en parallèle,
-chacune avec sa propre clé API/profil, voir app.config). Contient aussi un
-mécanisme distinct de comptage des instances vivantes (register_instance()/
-unregister_instance()/count_alive_instances()), indépendant du profil : une
-instance sans profil actif (aucun profil libre, ou aucun profil encore créé)
-ne détient aucun verrou de profil, donc serait invisible à un comptage basé
-uniquement dessus."""
+"""Verrous inter-instances de Distillat, pour l'usage à plusieurs instances
+lancées en parallèle sur la même machine (voir app.config) :
+- verrou par profil de clé API (acquire_profile_lock()...), pour qu'une
+  instance sache si un profil donné est déjà utilisé par une autre instance
+  en cours d'exécution ;
+- verrou par livre (acquire_book_lock()..., identifié par le hash SHA-256 du
+  texte extrait, voir generation_resume.compute_book_hash()), pour que deux
+  instances ne génèrent jamais la fiche du même livre en même temps - qu'il
+  s'agisse d'une première génération ou de la reprise d'un même état
+  interrompu, qui consommerait du quota en double pour un résultat identique
+  et écraserait tour à tour le même fichier de reprise.
+Contient aussi un mécanisme distinct de comptage des instances vivantes
+(register_instance()/unregister_instance()/count_alive_instances()),
+indépendant du profil : une instance sans profil actif (aucun profil libre,
+ou aucun profil encore créé) ne détient aucun verrou de profil, donc serait
+invisible à un comptage basé uniquement dessus."""
 import json
 import os
 import platform
@@ -41,9 +48,13 @@ def _lock_path(profile_id: str) -> Path:
     return config.get_settings_dir() / f".profile_lock_{profile_id}.json"
 
 
-def _read_lock(profile_id: str) -> dict | None:
+def _book_lock_path(book_hash: str) -> Path:
+    return config.get_settings_dir() / f".book_lock_{book_hash}.json"
+
+
+def _read_lock_file(lock_path: Path) -> dict | None:
     try:
-        data = json.loads(_lock_path(profile_id).read_text(encoding="utf-8"))
+        data = json.loads(lock_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
@@ -127,22 +138,21 @@ def _try_create_lock_file(lock_path: Path) -> bool:
         return False
 
 
-def acquire_profile_lock(profile_id: str) -> bool:
-    """Tente de réserver ce profil pour le processus courant. Réussit si
-    aucun verrou n'existe, ou si le verrou existant est orphelin (son
-    propriétaire n'est plus vivant, voir _owner_is_alive) ; échoue si un
-    autre processus vivant le détient déjà, sans jamais l'écraser dans ce
-    cas. La création du fichier est atomique (voir _try_create_lock_file) :
-    l'ancien enchaînement lire-vérifier-écrire laissait deux instances
-    lancées simultanément lire toutes deux "verrou absent" puis l'écrire
-    toutes deux, chacune se croyant propriétaire du même profil (course
-    fermée le 2026-07-22). Échoue aussi (False) si le fichier de verrou ne
-    peut pas être réellement écrit sur disque : retourner True sans verrou
-    posé serait une fausse possession silencieuse, invisible des autres
-    instances."""
-    lock_path = _lock_path(profile_id)
+def _acquire_lock(lock_path: Path) -> bool:
+    """Tente de réserver ce verrou (profil ou livre) pour le processus
+    courant. Réussit si aucun verrou n'existe, ou si le verrou existant est
+    orphelin (son propriétaire n'est plus vivant, voir _owner_is_alive) ;
+    échoue si un autre processus vivant le détient déjà, sans jamais
+    l'écraser dans ce cas. La création du fichier est atomique (voir
+    _try_create_lock_file) : l'ancien enchaînement lire-vérifier-écrire
+    laissait deux instances lancées simultanément lire toutes deux "verrou
+    absent" puis l'écrire toutes deux, chacune se croyant propriétaire du
+    même profil (course fermée le 2026-07-22). Échoue aussi (False) si le
+    fichier de verrou ne peut pas être réellement écrit sur disque :
+    retourner True sans verrou posé serait une fausse possession
+    silencieuse, invisible des autres instances."""
     for _ in range(_ACQUIRE_MAX_ATTEMPTS):
-        existing = _read_lock(profile_id)
+        existing = _read_lock_file(lock_path)
         if existing is not None:
             if existing.get("pid") == os.getpid():
                 return True
@@ -165,17 +175,16 @@ def acquire_profile_lock(profile_id: str) -> bool:
     return False
 
 
-def is_profile_locked_elsewhere(profile_id: str) -> bool:
-    """Indique si ce profil est actuellement verrouillé par un AUTRE
-    processus vivant, en lecture seule (jamais de prise/relâchement de
+def _is_locked_elsewhere(lock_path: Path) -> bool:
+    """Indique si ce verrou (profil ou livre) est actuellement détenu par un
+    AUTRE processus vivant, en lecture seule (jamais de prise/relâchement de
     verrou par effet de bord). À utiliser pour un simple affichage (ex. le
     suffixe "utilisé par une autre fenêtre" de ProfilesDialog._reload_list())
-    plutôt que acquire_profile_lock()/release_profile_lock() : ce couple
-    perturbait une autre instance en train de résoudre son propre profil au
-    même instant (voir _resolve_active_profile()), en lui faisant croire
-    momentanément que ce profil venait d'être libéré puis repris (audit du
-    2026-07-22)."""
-    existing = _read_lock(profile_id)
+    plutôt qu'un couple acquire/release : ce couple perturbait une autre
+    instance en train de résoudre son propre profil au même instant (voir
+    _resolve_active_profile()), en lui faisant croire momentanément que ce
+    profil venait d'être libéré puis repris (audit du 2026-07-22)."""
+    existing = _read_lock_file(lock_path)
     if existing is None:
         return False
     if existing.get("pid") == os.getpid():
@@ -183,17 +192,52 @@ def is_profile_locked_elsewhere(profile_id: str) -> bool:
     return _owner_is_alive(existing)
 
 
-def release_profile_lock(profile_id: str) -> None:
+def _release_lock(lock_path: Path) -> None:
     """Ne supprime le verrou que s'il appartient bien au processus courant,
     pour ne jamais effacer par erreur le verrou d'une autre instance qui
-    aurait entre-temps repris ce profil après un crash de la nôtre."""
-    existing = _read_lock(profile_id)
+    l'aurait entre-temps repris après un crash de la nôtre."""
+    existing = _read_lock_file(lock_path)
     if existing is None or existing.get("pid") != os.getpid():
         return
     try:
-        _lock_path(profile_id).unlink(missing_ok=True)
+        lock_path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def acquire_profile_lock(profile_id: str) -> bool:
+    return _acquire_lock(_lock_path(profile_id))
+
+
+def is_profile_locked_elsewhere(profile_id: str) -> bool:
+    return _is_locked_elsewhere(_lock_path(profile_id))
+
+
+def release_profile_lock(profile_id: str) -> None:
+    _release_lock(_lock_path(profile_id))
+
+
+def acquire_book_lock(book_hash: str) -> bool:
+    """Réserve la génération de ce livre pour le processus courant, pris par
+    SummarizeWorker.run() juste après le calcul du hash (seul moment où il
+    est connu pour une première génération, l'extraction ayant lieu dans le
+    worker) et avant tout appel à Gemini, puis libéré en fin de génération
+    (succès comme échec : un échec partiel réécrit l'état de reprise avant
+    de libérer, la reprise redevenant alors disponible pour n'importe quelle
+    instance). Un crash laisse un verrou orphelin, démasqué par
+    _owner_is_alive comme pour les profils."""
+    return _acquire_lock(_book_lock_path(book_hash))
+
+
+def is_book_locked_elsewhere(book_hash: str) -> bool:
+    """Lecture seule, pour l'affichage en direct de PendingResumesDialog
+    ("reprise en cours dans une autre fenêtre") et le refus anticipé au clic
+    sur Résumer quand le hash est déjà connu via un état de reprise."""
+    return _is_locked_elsewhere(_book_lock_path(book_hash))
+
+
+def release_book_lock(book_hash: str) -> None:
+    _release_lock(_book_lock_path(book_hash))
 
 
 def _instance_marker_path(pid: int) -> Path:

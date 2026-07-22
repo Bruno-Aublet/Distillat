@@ -27,7 +27,18 @@ sauvegarde JSON et/ou export PDF.
 - **`app/worker.py`** (`SummarizeWorker`, `QThread`) : exécute extraction du
   livre + appel Gemini hors du thread UI, pour ne pas geler l'interface.
   Émet des signaux Qt (`progress`, `quota_updated`, `finished_ok`, `failed`)
-  consommés par `MainWindow`.
+  consommés par `MainWindow`. Juste après le calcul du hash du livre (seul
+  moment où il est connu pour une première génération, l'extraction ayant
+  lieu ici) et avant tout appel à Gemini, `run()` prend le verrou de livre
+  (`instance_lock.acquire_book_lock()`, ajouté le 2026-07-22) : si une autre
+  instance de Distillat génère déjà ce même livre, la génération échoue
+  immédiatement (`failed` avec `error_kind` `"book_locked"`, aucun appel API)
+  au lieu de consommer du quota en double pour la même fiche et d'écraser
+  tour à tour le même fichier de reprise. Le verrou est libéré dans le
+  `finally` de `run()` (succès comme échec, après la sauvegarde éventuelle de
+  l'état de reprise), et `locked_book_hash` (champ public, `None` hors
+  détention) permet à `main_window._confirm_abort_running_generation()` de le
+  libérer après un `terminate()`, qui court-circuite ce `finally`.
 
 ## Modules `app/`
 
@@ -165,12 +176,17 @@ sauvegarde JSON et/ou export PDF.
     à toute suppression de fichier faite par l'application ; voir aussi
     `generation_resume.clear_resume_state()`).
 
-- **`app/instance_lock.py`** (ajouté le 2026-07-22) : verrou par profil de
-  clé API, pour permettre de lancer plusieurs instances de Distillat en
-  parallèle (une clé différente chacune, usage régulier prévu par
-  l'utilisateur) sans qu'une instance réutilise par erreur un profil déjà
-  actif ailleurs. Un fichier `.profile_lock_<id_profil>.json` (dossier
-  `config.get_settings_dir()`) contient le PID du processus qui détient le
+- **`app/instance_lock.py`** (ajouté le 2026-07-22) : verrous
+  inter-instances, pour permettre de lancer plusieurs instances de Distillat
+  en parallèle (une clé différente chacune, usage régulier prévu par
+  l'utilisateur) : verrou par profil de clé API (pour qu'une instance ne
+  réutilise pas par erreur un profil déjà actif ailleurs) et verrou par livre
+  (voir plus bas). Toute la mécanique est commune (`_acquire_lock()`/
+  `_is_locked_elsewhere()`/`_release_lock()`, paramétrées par le chemin du
+  fichier de verrou), les fonctions publiques par type de verrou n'étant que
+  des façades qui résolvent ce chemin. Un fichier
+  `.profile_lock_<id_profil>.json` (dossier `config.get_settings_dir()`)
+  contient le PID du processus qui détient le
   verrou, sa date de création (`psutil.Process.create_time()`) et le nom de
   la machine (contenu commun avec les marqueurs d'instance, voir
   `_owner_content()`). `acquire_profile_lock(profile_id)` réussit si le
@@ -211,6 +227,25 @@ sauvegarde JSON et/ou export PDF.
   `config.list_profiles()`) et par `ProfilesDialog` pour les actions qui
   agissent réellement sur un profil (Modifier/Supprimer/Utiliser), et libéré
   dans `MainWindow.closeEvent()`.
+
+  Verrou par livre (`acquire_book_lock()`/`is_book_locked_elsewhere()`/
+  `release_book_lock()`, ajouté le 2026-07-22, fichier
+  `.book_lock_<hash>.json` où `<hash>` est le SHA-256 du texte extrait, voir
+  `generation_resume.compute_book_hash()`) : garantit que deux instances ne
+  génèrent jamais la fiche du même livre en même temps, qu'il s'agisse de
+  deux premières générations lancées en parallèle ou de la reprise du même
+  état interrompu depuis plusieurs fenêtres (chacune consommerait sinon du
+  quota pour produire une fiche identique et, en cas de nouvel échec partiel,
+  réécrirait tour à tour le même fichier `.generation_resume_<hash>.json`
+  avec sa propre progression, en "dernier qui écrit gagne"). Pris par
+  `SummarizeWorker.run()` juste après le calcul du hash et avant tout appel à
+  Gemini, libéré dans son `finally` (ou par
+  `main_window._confirm_abort_running_generation()` après un `terminate()`) ;
+  `is_book_locked_elsewhere()` (lecture seule, mêmes raisons que
+  `is_profile_locked_elsewhere()`) sert au rafraîchissement en direct de
+  `PendingResumesDialog` et au refus anticipé de `_on_summarize_clicked()`
+  quand un état de reprise fournit déjà le hash. Un crash laisse un verrou
+  orphelin, démasqué comme pour les profils par `_owner_is_alive()`.
 
   Mécanisme distinct (ajouté le 2026-07-22 avec le bouton "nouvelle
   instance" du header de `MainWindow`, à droite du titre) : comptage des
@@ -702,6 +737,11 @@ sauvegarde JSON et/ou export PDF.
   de clic accidentel (changement du 2026-07-21) ; `send2trash()` lève
   `FileNotFoundError` sur un fichier absent (contrairement à
   `unlink(missing_ok=True)`), d'où la vérification `exists()` préalable.
+  La reprise du même état (ou la génération du même livre) depuis plusieurs
+  instances de Distillat en parallèle est empêchée par le verrou de livre
+  (2026-07-22, voir `app/instance_lock.py` et `app/worker.py`) : sans lui,
+  chaque instance réécrivait tour à tour ce même fichier avec sa propre
+  progression en cas de nouvel échec partiel.
 
 - **`app/quota_tracker.py`** (`QuotaTracker`) : suivi *local* et *estimatif*
   des quotas Gemini (RPM/TPM sur fenêtre glissante de 60s, RPD persisté par
@@ -812,8 +852,11 @@ sauvegarde JSON et/ou export PDF.
   (`_is_newer()` retourne `False` sans lever). Seule une mise à jour trouvée
   a un effet visible : appel de `main_window.show_update_banner()`.
   `releases_page_url()` (lien « Téléchargement » du bandeau de mise à jour et
-  du footer) et `repo_page_url()` (lien « Code source » du footer) exposent
-  chacun une simple constante d'URL, sans appel réseau.
+  du footer), `repo_page_url()` (lien « Code source » du footer) et
+  `project_site_url()` (lien « Page web » du footer, ajouté le 2026-07-22,
+  vers https://bruno-aublet.github.io/Distillat/, la landing page du projet
+  hébergée via GitHub Pages) exposent chacun une simple constante d'URL, sans
+  appel réseau.
 
 - **`app/book_report.py`** (`BookReport`, `Character`) : structure de données
   centrale de la fiche + sérialisation JSON (`to_json`/`from_json`/`save`/`load`,
@@ -1031,9 +1074,16 @@ sauvegarde JSON et/ou export PDF.
     de rester vide en l'absence de traitement en cours (auparavant vide, ce
     qui isolait visuellement ce bouton `?` sans texte à côté). Le footer de
     `MainWindow` propose aussi, à droite du copyright, les liens « Code
-    source » (`update_checker.repo_page_url()`) et « Téléchargement »
+    source » (`update_checker.repo_page_url()`), « Téléchargement »
     (`update_checker.releases_page_url()`, déjà utilisé par le bandeau de mise
-    à jour), ouverts via `webbrowser.open()`.
+    à jour), « Changelog » et, ajouté le 2026-07-22, « Page web »
+    (`update_checker.project_site_url()`, vers la landing page du projet),
+    ouverts via `webbrowser.open()`. Comme tout texte affiché,
+    `project_site_link_button` est réappliqué dans `_retranslate_ui()` au
+    changement de langue à chaud : un bouton ajouté au footer sans y être
+    ajouté resterait figé dans la langue de sa création (bug corrigé le
+    2026-07-22 lors de l'ajout de ce lien, avant d'être remarqué par
+    l'utilisateur).
     `PendingResumesDialog` (appelé par `_offer_pending_resumes()`, invoqué
     depuis `main.py` juste après `window.show()` - et non depuis
     `MainWindow.__init__()` - pour que la fenêtre principale soit déjà visible
@@ -1042,7 +1092,21 @@ sauvegarde JSON et/ou export PDF.
     (`generation_resume.load_all_resume_states()`) ; une entrée dont le
     fichier livre n'existe plus (déplacé/supprimé) est affichée en rouge avec
     un suffixe traduit et son bouton "Reprendre la sélection" reste désactivé
-    (seul "Supprimer" reste possible pour elle). Le focus par défaut est
+    (seul "Supprimer" reste possible pour elle). Un `QTimer` d'une seconde
+    (`_refresh_locked_states()`, ajouté le 2026-07-22) surveille en direct
+    les verrous de livre (`instance_lock.is_book_locked_elsewhere()`, lecture
+    seule) : une reprise démarrée entre-temps dans une autre instance est
+    affichée en gris avec un suffixe "(en cours dans une autre fenêtre)" et
+    ses boutons "Reprendre la sélection" ET "Supprimer" sont désactivés,
+    l'inverse (verrou libéré, instance qui a planté) la rendant à nouveau
+    sélectionnable sans rouvrir le dialogue ; `_on_resume_clicked()`/
+    `_on_delete_clicked()` revérifient de plus le verrou de façon synchrone
+    au clic (le timer peut ne pas avoir encore relevé un verrou tout juste
+    posé). Ce marquage n'est qu'une aide visuelle : la vraie protection est
+    le verrou pris dans `SummarizeWorker.run()` (voir `app/instance_lock.py`),
+    qui couvre aussi le chemin sans dialogue (livre redéposé à la main puis
+    "Résumer") et la fenêtre de temps entre la sélection ici et le clic sur
+    "Résumer". Le focus par défaut est
     explicitement placé sur "Fermer" (`setFocus()` + `setAutoDefault(False)`
     sur les trois boutons) plutôt que de laisser Qt le donner par défaut au
     premier bouton focusable de la ligne, qui est "Supprimer" : un appui

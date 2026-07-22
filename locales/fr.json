@@ -51,6 +51,9 @@
   "worker_progress": {
     "reading_file": "Lecture du fichier…"
   },
+  "worker_errors": {
+    "book_locked_elsewhere": "La génération de ce livre est déjà en cours dans une autre fenêtre de Distillat. Attendez qu'elle se termine avant de relancer ce livre ici."
+  },
   "language_selector": {
     "label": "Langue :",
     "french": "Français",
@@ -174,6 +177,7 @@
     "intro": "Une ou plusieurs générations précédentes se sont arrêtées avant la fin. Sélectionnez un livre ci-dessous pour reprendre sa génération là où elle s'était arrêtée, ou fermez cette fenêtre pour décider plus tard (elle réapparaîtra au prochain démarrage tant qu'un livre reste en attente).",
     "item_label": "{filename} - {batches_done}/{batches_total} lot(s) de chapitres résumé(s)",
     "item_missing_suffix": "(fichier introuvable)",
+    "item_locked_suffix": "(en cours dans une autre fenêtre)",
     "delete_button": "Supprimer",
     "close_button": "Fermer",
     "resume_button": "Reprendre la sélection"
@@ -207,6 +211,7 @@
     "source_code_link": "Code source",
     "download_link": "Téléchargement",
     "changelog_link": "Changelog",
+    "project_site_link": "Page web",
     "no_cover": "Pas de couverture",
     "set_cover_action": "Définir la couverture...",
     "set_cover_dialog_title": "Choisir une image de couverture",
@@ -244,6 +249,7 @@
     "resume_wait_hint_other": "Ce n'est pas un problème de quota, il s'agit probablement d'un aléa ponctuel de génération. Vous pouvez réessayer tout de suite, ",
     "resume_hint_suffix": "\n\nRien n'est perdu : les {batches_done}/{batches_total} lot(s) de chapitres déjà résumés avec succès ont été sauvegardés. {wait_hint}glissez-déposez à nouveau ce même fichier EPUB/PDF et cliquez sur \"Résumer\" : Distillat reconnaîtra automatiquement où le traitement s'était arrêté et proposera de reprendre exactement à partir de là, sans refaire le travail déjà fait.",
     "error_title": "Erreur",
+    "book_locked_title": "Génération déjà en cours",
     "save_pdf_dialog_title": "Enregistrer le résumé",
     "save_pdf_filter": "Documents PDF (*.pdf)",
     "save_success_title": "Sauvegarde réussie",

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.1] - 2026-07-22 - Verrouillage multi-instances d'un livre en cours de génération, page web du projet
+
+- Lancer la génération d'un même livre depuis plusieurs fenêtres de Distillat en parallèle (première génération comme reprise d'une génération interrompue) consommait du quota en double et pouvait faire écraser tour à tour le même état de reprise. Un même livre ne peut désormais être généré que dans une seule fenêtre à la fois : les autres refusent avec un message explicite, et la fenêtre listant les livres en attente de reprise au démarrage indique désormais en direct ceux déjà en cours ailleurs (entrée grisée, non sélectionnable).
+- Le projet dispose désormais d'une page web de présentation (https://bruno-aublet.github.io/Distillat/), bilingue français/anglais.
+- Le footer de la fenêtre principale propose désormais un lien « Page web » (« Website » en anglais), à droite du lien Changelog, menant vers cette page.
+
 ## [1.3.0] - 2026-07-22 - Profils de clé API, usage multi-instances, fiabilité et ergonomie
 
 - L'application prend désormais en charge plusieurs profils de clé API Gemini nommés (bouton **Clé API** renommé **Profils**), pensés pour lancer plusieurs instances de Distillat en parallèle sur des comptes différents : au démarrage, chaque instance se voit automatiquement attribuer le premier profil non déjà utilisé par une autre instance ouverte sur le même ordinateur, sans manipulation manuelle ; si tous les profils enregistrés sont déjà utilisés ailleurs, l'instance démarre simplement sans profil actif, l'utilisateur n'étant averti qu'au moment où il en aurait réellement besoin (fenêtre **Profils**, qui indique alors quels profils sont occupés). La clé déjà enregistrée avant cette mise à jour est reprise automatiquement dans un premier profil nommé « Défaut ». Supprimer ou modifier la clé d'un profil actuellement utilisé (génération en cours dans cette fenêtre, ou profil actif dans une autre instance), ou basculer dessus comme profil actif d'une autre fenêtre pendant qu'une génération y est en cours, est empêché, avec un message explicite. Deux profils ne peuvent pas partager le même nom, ni la même clé API : la fenêtre **Profils** refuse l'ajout ou la modification d'un profil dans ce cas, avec un message indiquant le profil déjà concerné.
