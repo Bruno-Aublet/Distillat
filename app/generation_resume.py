@@ -18,6 +18,12 @@ _RESUME_FILENAME_SUFFIX = ".json"
 # vers le nouveau format au premier chargement suivant la mise à jour, pour ne
 # pas perdre silencieusement une reprise déjà en attente chez un utilisateur.
 _LEGACY_RESUME_FILENAME = ".generation_resume.json"
+# Modèle par défaut pour les états de reprise sauvegardés avant l'introduction
+# du champ "model" (2026-07-22, choix de modèle par profil) : seul modèle
+# existant à cette époque. Valeur figée volontairement, pas un import de
+# app.gemini_client.MODEL_NAME (cycle d'imports potentiel, et ce repère
+# historique ne doit pas changer si la valeur par défaut change à l'avenir).
+_LEGACY_DEFAULT_MODEL = "gemini-3.5-flash"
 
 
 @dataclass
@@ -27,6 +33,7 @@ class ResumeState:
     chapter_summaries: list[tuple[str, str]]
     batches_done: int
     batches_total: int
+    model: str = _LEGACY_DEFAULT_MODEL
 
 
 def compute_book_hash(full_text: str) -> str:
@@ -47,6 +54,7 @@ def save_resume_state(settings_dir: Path, state: ResumeState) -> None:
                     "chapter_summaries": [list(pair) for pair in state.chapter_summaries],
                     "batches_done": state.batches_done,
                     "batches_total": state.batches_total,
+                    "model": state.model,
                 },
                 ensure_ascii=False,
             ),
@@ -65,6 +73,7 @@ def _load_resume_state_from_path(resume_path: Path) -> ResumeState | None:
             chapter_summaries=[tuple(pair) for pair in data["chapter_summaries"]],
             batches_done=int(data["batches_done"]),
             batches_total=int(data["batches_total"]),
+            model=data.get("model", _LEGACY_DEFAULT_MODEL),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None

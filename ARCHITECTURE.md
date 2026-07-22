@@ -64,9 +64,10 @@ sauvegarde JSON et/ou export PDF.
     d'identification Windows), jamais en clair sur disque. Depuis l'ajout du
     support multi-instances (2026-07-22, voir `app/instance_lock.py`
     ci-dessous), plusieurs **profils** nommés peuvent coexister : chaque
-    profil (`{"id": <uuid4>, "name": <str>}`, sous la clé `"api_profiles"` de
-    `settings.json`, `list_profiles()`/`save_profiles()`) a sa propre entrée
-    keyring (`gemini_api_key_<id>`, `load_profile_api_key()`/
+    profil (`{"id": <uuid4>, "name": <str>, "model": <str> optionnel}`, sous
+    la clé `"api_profiles"` de `settings.json`, `list_profiles()`/
+    `save_profiles()`) a sa propre entrée keyring (`gemini_api_key_<id>`,
+    `load_profile_api_key()`/
     `save_profile_api_key()`/`delete_profile_api_key()`), distincte pour
     chaque profil. Toutes ces fonctions absorbent `keyring.errors.KeyringError`
     (service indisponible) plutôt que de laisser planter l'application.
@@ -100,15 +101,24 @@ sauvegarde JSON et/ou export PDF.
     nommant le profil déjà concerné), avant tout `save_profile_api_key()`/
     `save_profiles()`. `exclude_profile_id` ignore le profil en cours de
     modification, pour qu'un nom ou une clé laissés inchangés à l'édition ne
-    se signalent jamais comme leur propre doublon.
+    se signalent jamais comme leur propre doublon. `update_profile_model(profile_id, model)`
+    (ajoutée le 2026-07-22, choix de modèle Gemini par profil, voir
+    `gemini_client.AVAILABLE_MODELS` ci-dessous) change le champ `"model"` d'un
+    profil enregistré, même squelette que `rename_profile()` (relecture sous
+    verrou inter-processus, tolérant si le profil a disparu). Un profil sans
+    ce champ (créé avant cette fonctionnalité) est traité comme utilisant
+    `gemini_client.MODEL_NAME` par défaut, résolu via `.get("model", MODEL_NAME)`
+    par chaque appelant - aucune migration forcée, le champ s'ajoute
+    naturellement à la prochaine édition du profil via l'UI.
   - `load_settings()`/`save_settings(update)` : fonctions génériques centrales
     pour `settings.json` (dossier de config), qui regroupe tous les réglages
     peu fréquemment modifiés (langue de l'UI, prompts personnalisés par
     profil de clé API puis par langue, derniers dossiers utilisés) en un seul
-    fichier - à la différence du compteur de quota (`.quota_state_<hash>.json`,
-    un fichier par clé API depuis le 2026-07-21, voir `quota_tracker.py`
-    ci-dessous) ou des limites RPM/TPM/RPD (`quota_limits_<hash>.json`, un
-    fichier par clé API depuis le 2026-07-22), réécrits bien plus souvent (à
+    fichier - à la différence du compteur de quota
+    (`.quota_state_<hash>_<modele>.json`, un fichier par clé API depuis le
+    2026-07-21, et par modèle depuis le 2026-07-22, voir `quota_tracker.py`
+    ci-dessous) ou des limites RPM/TPM/RPD (`quota_limits_<hash>_<modele>.json`,
+    même granularité), réécrits bien plus souvent (à
     chaque appel Gemini pour le premier) et donc gardés dans des fichiers
     séparés pour limiter la
     fenêtre d'exposition à une corruption et éviter de réécrire inutilement
@@ -337,9 +347,30 @@ sauvegarde JSON et/ou export PDF.
   `CHANGELOG.md`). Un seul `genai.Client` module-level (`configure()`), créé
   avec la clé API et `_HTTP_OPTIONS_NO_RETRY` ; pas d'équivalent du
   `genai.configure()` global de l'ancien SDK, ni de `GenerativeModel` par
-  appel : `model=MODEL_NAME` est passé explicitement à chaque appel
-  (`_client.models.generate_content(...)`/`count_tokens(...)`).
-  - `MODEL_NAME = "gemini-3.5-flash"`. Le mode JSON forcé
+  appel : `model=` est passé explicitement à chaque appel
+  (`_client.models.generate_content(...)`/`count_tokens(...)`), résolu depuis
+  le paramètre `model` propagé de bout en bout (voir ci-dessous), avec
+  `MODEL_NAME` comme valeur par défaut.
+  - `MODEL_NAME = "gemini-3.5-flash"` reste la valeur par défaut/de
+    rétrocompatibilité, mais depuis le 2026-07-22 (choix de modèle Gemini par
+    profil, voir `app/config.py` ci-dessus) le modèle réellement utilisé est
+    choisissable par profil et propagé en paramètre explicite `model: str`
+    à travers toute la chaîne d'appel (`main_window` -> `worker.SummarizeWorker`
+    -> `gemini_client.generate_book_report()`/`_generate_book_report_impl()`
+    -> `_call_gemini()`/`count_tokens()`/`_split_chapters_into_batches()`),
+    même mécanisme que `profile_id` pour la résolution des prompts
+    personnalisés - pas de variable globale mutable, pas de singleton.
+    `AVAILABLE_MODELS: list[ModelInfo]` est le registre centralisé des
+    modèles proposés au choix (`ModelInfo(name, max_input_tokens,
+    max_tokens_per_request)`), résolu par nom via `get_model_info(name)`
+    (repli sur le premier élément de la liste si le nom stocké dans un vieux
+    profil ne correspond à aucune entrée connue, ex. modèle retiré depuis).
+    Ajouter ou retirer un modèle proposé se limite à modifier cette liste :
+    `gemini-3.5-flash` et `gemini-3.6-flash` y partagent aujourd'hui les
+    mêmes valeurs (`max_input_tokens=900_000`, `max_tokens_per_request=200_000`),
+    par choix documenté en commentaire (specs et quotas gratuits identiques
+    vérifiés le 2026-07-22), pas par oubli - à revoir si un futur modèle aux
+    caractéristiques différentes est ajouté. Le mode JSON forcé
     (`response_mime_type="application/json"`, pour fiabiliser le JSON en
     sortie) est un `genai_types.GenerateContentConfig` passé en paramètre
     `config=` de chaque appel de génération (`_JSON_GENERATION_CONFIG`), pas
@@ -347,11 +378,12 @@ sauvegarde JSON et/ou export PDF.
   - `generate_book_report()` est le point d'entrée : compte les tokens du
     texte intégral, puis deux cas selon ce compte, plus un repli particulier
     au sein du second (voir plus bas) :
-    - **Texte tient dans `MAX_TOKENS_PER_REQUEST` (200k)** : un seul appel
+    - **Texte tient dans `max_tokens_per_request` du `ModelInfo` résolu (200k
+      pour les deux modèles actuels)** : un seul appel
       combiné demandant résumé court + détaillé + personnages + analyse en
       JSON (`_full_report_prompt`, prompt par défaut `full_report`).
     - **Texte trop long** : `_split_chapters_into_batches()` répartit les
-      chapitres en lots consécutifs tenant chacun sous `MAX_TOKENS_PER_REQUEST`
+      chapitres en lots consécutifs tenant chacun sous `max_tokens_per_request`
       (le plus de chapitres possible par lot, pour limiter le nombre de
       requêtes - le quota RPD du palier gratuit est très serré). Chaque lot
       est résumé en un appel JSON (`_chapter_summary_prompt`, prompt par
@@ -383,16 +415,18 @@ sauvegarde JSON et/ou export PDF.
         (`_full_report_prompt` sur `full_text`) plutôt que d'enchaîner
         résumé-de-lot puis consolidation séparée : même texte envoyé au
         final, une requête Gemini économisée. Aucun risque de dépassement
-        TPM introduit par ce repli : `MAX_TOKENS_PER_REQUEST` (200k) garde
+        TPM introduit par ce repli : `max_tokens_per_request` (200k) garde
         déjà 50k tokens de marge sous la vraie limite TPM (250k), largement
         suffisante pour couvrir l'écart de comptage et les instructions
         ajoutées par `_full_report_prompt`. Décidé en conversation le
         2026-07-22 suite à un livre affichant "lot de chapitres 1/1" dans
         l'UI - comportement correct mais déroutant sans cette explication.
-    - **`MAX_TOKENS_PER_REQUEST` (200k) vs `MAX_INPUT_TOKENS` (900k)** : ne
-      pas confondre les deux (bug corrigé le 2026-07-19). `MAX_INPUT_TOKENS`
+    - **`max_tokens_per_request` (200k) vs `max_input_tokens` (900k) du `ModelInfo` résolu** : ne
+      pas confondre les deux (bug corrigé le 2026-07-19, à l'époque constantes
+      globales `MAX_TOKENS_PER_REQUEST`/`MAX_INPUT_TOKENS`, devenues champs de
+      `ModelInfo` le 2026-07-22). `max_input_tokens`
       documente la fenêtre de contexte du modèle (limite haute, rarement
-      atteinte) ; `MAX_TOKENS_PER_REQUEST` est la vraie contrainte
+      atteinte) ; `max_tokens_per_request` est la vraie contrainte
       opérationnelle, calée avec marge sous la limite de débit par minute
       (TPM) du palier gratuit constatée sur le dashboard AI Studio - c'est
       elle qui dimensionne un appel unique, sous peine de saturer le TPM à
@@ -410,7 +444,15 @@ sauvegarde JSON et/ou export PDF.
       `app/worker.py`/`app/main_window.py` (sauvegarde sur échec, proposition
       de reprise au clic sur "Résumer" si le fichier sélectionné correspond,
       et au démarrage de l'application via `PendingResumesDialog` si un ou
-      plusieurs livres sont en attente).
+      plusieurs livres sont en attente). Depuis le 2026-07-22 (choix de modèle
+      par profil), `ResumeState`/le JSON persisté incluent aussi le modèle
+      utilisé pour cette génération (`model`, repli sur `MODEL_NAME` si absent
+      d'un ancien fichier) : `worker.SummarizeWorker.run()` fait primer ce
+      modèle d'origine sur le modèle actuellement actif du profil dès qu'une
+      reprise correspond au livre en cours, pour ne jamais mélanger dans une
+      même fiche des résumés de chapitres produits par deux modèles
+      différents - le modèle actif du profil ne s'applique qu'à la prochaine
+      génération lancée sur un livre neuf, sans reprise en attente.
   - `_call_gemini()` effectue un seul appel, sans retry automatique (voir
     historique de conversation du 2026-07-19 : c'est un choix délibéré,
     l'utilisateur doit recliquer lui-même sur "Résumer") : toute erreur API
@@ -648,6 +690,31 @@ sauvegarde JSON et/ou export PDF.
     centralise l'appel à `.format()` pour les 3 prompts et traduit un
     `KeyError` (repère mal orthographié dans un prompt personnalisé, ex.
     `{full_textt}`) en `GeminiError` nommant le prompt et le repère en cause.
+  - **Arrêt prématuré sans erreur (constaté le 2026-07-22 avec gemini-3.6-flash)** :
+    `DEFAULT_FULL_REPORT_PROMPT`/`_EN` et `DEFAULT_CONSOLIDATION_PROMPT`/`_EN`
+    demandent 4 éléments (`summary`, `detailed_summary`, `characters`,
+    `analysis`) dans un seul objet JSON, mais seul `summary` est vérifié comme
+    obligatoire par `_parse_full_report_json()` (ligne ~1135, `if not summary:
+    raise GeminiError(...)`) - `detailed_summary`/`characters`/`analysis` se
+    replient silencieusement sur une valeur vide si absents, sans lever
+    d'erreur. Un livre généré avec gemini-3.6-flash a ainsi produit un JSON
+    syntaxiquement valide et un `finish_reason` normal (pas de troncature),
+    mais avec `characters: []` et `analysis: ""`, après un `detailed_summary`
+    deux fois plus long que la normale (comparé au même livre généré avec
+    gemini-3.5-flash) : le modèle s'est arrêté de lui-même après le second
+    élément plutôt que de produire les quatre, sans que rien dans le code ne
+    détecte ni ne signale ce cas. Les 4 templates par défaut ont été renforcés
+    en conséquence : une consigne générale ("les quatre sont OBLIGATOIRES...
+    ne t'arrête JAMAIS en cours de route", volontairement non ciblée sur un
+    champ précis pour ne pas laisser croire qu'un arrêt après un autre champ
+    serait acceptable) ajoutée après l'énumération des 4 éléments, et un
+    rappel similaire juste avant/dans le bloc JSON attendu. Aucun garde-fou
+    côté code (retry automatique si `characters`/`analysis` reviennent vides)
+    n'a été ajouté à ce stade, décision explicite de l'utilisateur - à
+    reconsidérer si le comportement se reproduit malgré le renforcement du
+    prompt. Cette consigne ne s'applique qu'aux prompts par défaut : un
+    prompt personnalisé par l'utilisateur (voir `app/prompts_store.py`) qui
+    remplacerait un de ces 4 templates n'en bénéficie pas automatiquement.
     Le marqueur de titre de chapitre inséré par `_chapters_batch_text()`
     (`[[[TITRE: ...]]]`/`[[[TITLE: ...]]]`) suit aussi la langue active, pour
     rester cohérent avec celui annoncé dans le prompt de résumé de lot.
@@ -745,20 +812,30 @@ sauvegarde JSON et/ou export PDF.
 
 - **`app/quota_tracker.py`** (`QuotaTracker`) : suivi *local* et *estimatif*
   des quotas Gemini (RPM/TPM sur fenêtre glissante de 60s, RPD persisté par
-  date dans `.quota_state_<hash>.json`, un fichier par clé API - voir plus
-  bas). Les limites par défaut (`DEFAULT_RPM/TPM/RPD_LIMIT`) sont ajustables
-  par l'utilisateur via l'UI et stockées dans `quota_limits_<hash>.json`, un
-  fichier par clé API (`quota_limits_path_for_key()`, même principe que
-  `daily_state_path_for_key()`, 2026-07-22, support des profils multiples) :
+  date dans `.quota_state_<hash>_<modele>.json`, un fichier par (clé API,
+  modèle) - voir plus bas). Les limites par défaut (`DEFAULT_RPM/TPM/RPD_LIMIT`)
+  sont ajustables par l'utilisateur via l'UI et stockées dans
+  `quota_limits_<hash>_<modele>.json`, même granularité
+  (`quota_limits_path_for_key()`, même principe que
+  `daily_state_path_for_key()`, 2026-07-22, support des profils multiples puis
+  du choix de modèle par profil) :
   deux comptes Google avec des paliers différents (gratuit standard,
-  payant...) peuvent ainsi avoir des limites configurées différemment, plutôt
-  que de partager un seul fichier global. `QuotaTracker.quota_limits_path`
-  (nouveau champ, `None` tant qu'aucune clé n'a encore été sélectionnée via
-  `switch_api_key()`) est rebasculé et migré (`_migrate_legacy_quota_limits_if_needed()`,
-  reprise une seule fois de l'ancien fichier unique `quota_limits.json` vers
-  la première clé qui l'utilise après cette mise à jour, même mécanisme que
+  payant...), ou deux modèles utilisés avec la même clé, peuvent ainsi avoir
+  des limites configurées différemment, plutôt
+  que de partager un seul fichier global. `model_slug(model)` normalise le nom
+  du modèle pour un nom de fichier sûr (les points de "gemini-3.5-flash" ne
+  posent pas problème sur Windows, mais sont remplacés par des tirets par
+  cohérence). `QuotaTracker.quota_limits_path`
+  (nouveau champ, `None` tant qu'aucun contexte (clé, modèle) n'a encore été
+  sélectionné via `switch_context()`) est rebasculé et migré
+  (`_migrate_legacy_quota_limits_if_needed()`,
+  reprise une seule fois de l'ancien fichier unique `quota_limits.json`, ou du
+  fichier par clé sans modèle `quota_limits_<hash>.json` (avant le
+  2026-07-22, seulement si le modèle sélectionné est celui par défaut), vers
+  le fichier (clé, modèle) qui l'utilise en premier après cette mise à jour,
+  même mécanisme que
   `_migrate_legacy_daily_state_if_needed()`) à chaque appel à
-  `switch_api_key()`, en même temps que `daily_state_path`. `load_quota_limits(limits_path)`/
+  `switch_context()`, en même temps que `daily_state_path`. `load_quota_limits(limits_path)`/
   `save_quota_limits(limits_path, ...)` prennent désormais directement le
   chemin du fichier concerné plutôt qu'un `settings_dir` + résolution
   implicite : à l'appelant (`main_window._on_edit_quota_limits()`) d'utiliser
@@ -813,7 +890,8 @@ sauvegarde JSON et/ou export PDF.
   `record_call()` (qui, lui, fait foi pour le quota réel RPD/RPM) n'a pas
   encore pu être crédité faute de réponse. Ne jamais laisser ce compteur
   influencer `requests_today`/`_recent_calls` ni les limites affichées.
-  **Isolation par clé API** (`switch_api_key()`, ajoutée le 2026-07-21) :
+  **Isolation par clé API** (`switch_api_key()`, ajoutée le 2026-07-21,
+  renommée `switch_context()` le 2026-07-22 pour aussi isoler par modèle) :
   avant ce fix, `daily_state_path` était un chemin fixe unique
   (`.quota_state.json`), donc changer de clé API en cours de journée
   (bouton **Clé API**, ou en testant plusieurs comptes Google) continuait de
@@ -823,20 +901,29 @@ sauvegarde JSON et/ou export PDF.
   premier. `api_key_hash()` (SHA-256 tronqué à 8 caractères, jamais la clé en
   clair - même dérivation que le hash déjà journalisé par `main_window` dans
   `api_requests.log`, `cle_api_hash=...`) et `daily_state_path_for_key()`
-  dérivent désormais un fichier `.quota_state_<hash>.json` par clé.
-  `switch_api_key(api_key)` : no-op si le hash n'a pas changé depuis le
-  dernier appel (ou l'initialisation) ; sinon réinitialise tout l'état en
+  dérivent un fichier `.quota_state_<hash>_<modele>.json` par (clé, modèle)
+  depuis l'introduction du choix de modèle par profil (2026-07-22) : chaque
+  modèle utilisé avec une même clé a ses propres compteurs, même si
+  `gemini-3.5-flash` et `gemini-3.6-flash` partagent aujourd'hui les mêmes
+  limites.
+  `switch_context(api_key, model)` : no-op si ni le hash ni le modèle n'ont
+  changé depuis le dernier appel (ou l'initialisation) ; sinon réinitialise
+  tout l'état en
   mémoire (tokens cumulés, fenêtre glissante RPM, `_requests_in_flight` -
-  aucun sens pour un autre compte), pointe `daily_state_path` vers le
-  fichier de la nouvelle clé, migre une seule fois l'ancien fichier unique
-  `.quota_state.json` s'il existe encore et que le nouveau fichier n'existe
+  aucun sens pour un autre contexte), pointe `daily_state_path` vers le
+  fichier du nouveau contexte, migre une seule fois soit l'ancien fichier
+  unique `.quota_state.json`, soit le fichier par clé sans modèle
+  `.quota_state_<hash>.json` (avant le 2026-07-22, uniquement si le modèle
+  sélectionné est celui par défaut `MODEL_NAME`, seul modèle ayant pu produire
+  ce fichier) s'ils existent encore et que le nouveau fichier n'existe
   pas (`_migrate_legacy_daily_state_if_needed()`, `Path.replace()`), puis
   recharge le compteur RPD persistant de ce fichier. Appelée par
   `main_window` : à la construction de `MainWindow` si une clé est déjà
   enregistrée (sinon l'affichage resterait sur le tracker construit avec un
   chemin provisoire `.quota_state_pending.json` jusqu'au premier lancement),
   dans `_on_summarize_clicked()` juste après `_ensure_api_key()` (avant de
-  créer le `SummarizeWorker`), et dans `_prompt_for_api_key()` juste après
+  créer le `SummarizeWorker`, avec le modèle résolu du profil actif), et dans
+  `_prompt_for_api_key()` juste après
   l'enregistrement d'une nouvelle clé (avec rafraîchissement immédiat de
   l'affichage via `_update_quota_display()`, sans attendre la prochaine
   génération).
@@ -907,7 +994,12 @@ sauvegarde JSON et/ou export PDF.
     affichage de quota en temps réel, chrono écoulé pendant la génération,
     bandeau de mise à jour disponible (`update_banner_label`, masqué par
     défaut, voir `app/update_checker.py`), label du profil de clé API actif
-    (`active_profile_label`, à côté du bouton "Profils").
+    (`active_profile_label`, à côté du bouton "Profils") : affiche depuis le
+    2026-07-22 le nom du profil et le modèle Gemini actuellement utilisé
+    (`profile.get("model", MODEL_NAME)`) sur deux lignes distinctes (`\n`
+    dans la clé de traduction `main_window.active_profile_label`, `Qt.AlignCenter`),
+    rafraîchi par `_update_profile_label()` à chaque changement de profil
+    actif ou de modèle via la fenêtre **Profils**.
   - `setMinimumSize(400, 300)` (appelé dans `__init__`, avant
     `_size_to_available_screen()` qui dimensionne/positionne la fenêtre à
     l'ouverture) : sans cet appel, Qt calcule automatiquement une taille
@@ -924,7 +1016,8 @@ sauvegarde JSON et/ou export PDF.
     premier profil de `config.list_profiles()` (dans l'ordre
     d'enregistrement) dont `instance_lock.acquire_profile_lock()` réussit ET
     dont la clé API est réellement lisible via keyring, bascule aussitôt
-    `quota_tracker.switch_api_key()` dessus. Un profil dont le verrou est
+    `quota_tracker.switch_context()` dessus (avec le modèle du profil, voir
+    ci-dessus). Un profil dont le verrou est
     acquis mais dont la clé n'est pas lisible (Gestionnaire d'identification
     Windows indisponible pour cette entrée précise) libère aussitôt son
     verrou et cède la place au profil suivant plutôt que de rester
@@ -1021,13 +1114,13 @@ sauvegarde JSON et/ou export PDF.
     instance tant qu'une génération tourne avec lui ; (4) le même
     `generation_in_progress` refuse aussi de changer de profil actif (bouton
     "Utiliser") tant qu'une génération tourne (audit du 2026-07-22 : le
-    `switch_api_key()` immédiat aurait crédité les requêtes restantes de la
+    `switch_context()` immédiat aurait crédité les requêtes restantes de la
     génération en cours au compteur du nouveau compte, et le verrou de
     l'ancien profil aurait été libéré alors que sa clé restait activement
     utilisée par le worker). Si la clé du profil choisi via "Utiliser" n'est
     pas lisible (Gestionnaire d'identification Windows indisponible),
     `active_profile` est quand même mis à jour vers ce profil (le choix de
-    l'utilisateur est respecté) mais `quota_tracker.switch_api_key()` n'est
+    l'utilisateur est respecté) mais `quota_tracker.switch_context()` n'est
     pas appelé : le suivi de quota affiché reste sur son état actuel plutôt
     que d'être signalé comme basculé sans que le compteur affiché ne
     corresponde réellement au nouveau profil actif. Ajouter/Modifier/Supprimer écrivent la liste
@@ -1183,3 +1276,43 @@ distribution de l'application (voir `build.py`/`distillat.spec` pour ça).
   `count_tokens()` (gratuit, hors quota, voir plus haut) avec la clé API déjà
   enregistrée dans l'application. Usage :
   `python Tools/estimate_tokens.py "chemin/vers/livre.epub"`.
+
+## Page web du projet (`index.html`)
+
+Landing page du projet, hébergée via GitHub Pages à
+https://bruno-aublet.github.io/Distillat/ (lien "Page web" du footer de
+l'application, voir `update_checker.project_site_url()` ci-dessus). Fichier
+généré par l'outil de publication d'artefact ("Claude Design"), jamais écrit
+ni édité à la main directement : toute modification de contenu (textes,
+mise en page, images) doit repasser par une nouvelle génération/publication
+de cet outil, puis un remplacement complet du fichier dans le projet.
+
+**Piège découvert le 2026-07-22, à connaître avant toute modification
+ponctuelle de ce fichier (ex : ajout d'une favicon) :** `index.html` n'est
+pas une page HTML statique classique. C'est un bundler auto-extractible :
+- Le `<head>` visible en clair au tout début du fichier (avant le premier
+  `<script>`) n'est qu'une coquille de chargement temporaire, affichée le
+  temps que le JavaScript s'exécute. Toute balise ajoutée uniquement là
+  (ex. `<link rel="icon">`) est silencieusement perdue - elle n'a aucun
+  effet sur la page finale, sans erreur ni avertissement visible.
+- Au chargement, ce script parse le contenu JSON d'un
+  `<script type="__bundler/template">` (chaîne échappée, à décoder avec
+  `json.loads()` pour l'inspecter/modifier), résout les URLs de ressources
+  (polices, images) en blobs, puis remplace tout
+  `document.documentElement` par le DOM reconstruit depuis ce template
+  (`document.documentElement.replaceWith(...)`). C'est ce `<head>`-là,
+  encodé dans ce JSON, qui est réellement appliqué au document final - pas
+  celui visible en clair au début du fichier.
+- Autre piège rencontré dans une génération ultérieure du même outil : une
+  balise pourtant présente dans le bon JSON du template peut malgré tout
+  rester sans effet si elle est placée dans le `<body>` (ex. dans un
+  élément `<helmet>`/`<x-dc>`, artefact probable d'un renderer React type
+  `react-helmet`) plutôt que dans le vrai `<head>` du template : rien dans
+  ce fichier ne migre le contenu d'un tel `<helmet>` vers le `<head>`, cette
+  balise reste donc totalement inerte pour le navigateur.
+- Pour vérifier ou corriger une balise du `<head>` réellement actif :
+  extraire et parser le JSON de `<script type="__bundler/template">`
+  (`json.loads()` sur son contenu), chercher `</head>` dans le texte décodé,
+  et s'assurer que la balise voulue est bien juste avant, dans le `<head>`
+  du template (jamais dans le head visible en clair du début de fichier, ni
+  dans le `<body>`).

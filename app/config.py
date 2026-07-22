@@ -407,8 +407,11 @@ def _profile_keyring_username(profile_id: str) -> str:
 
 def list_profiles() -> list[dict]:
     """Liste des profils de clé API enregistrés (chacun {"id": str, "name":
-    str}, jamais la clé elle-même qui reste uniquement dans keyring), dans
-    leur ordre d'enregistrement. Liste vide si aucun profil n'existe encore
+    str, "model": str optionnel}, jamais la clé elle-même qui reste uniquement
+    dans keyring), dans leur ordre d'enregistrement. "model" est absent des
+    profils créés avant l'introduction du choix de modèle par profil :
+    l'appelant doit résoudre cette absence via .get("model", MODEL_NAME) (voir
+    app/gemini_client.py). Liste vide si aucun profil n'existe encore
     (première utilisation, ou migration pas encore effectuée)."""
     profiles = load_settings().get("api_profiles", [])
     return profiles if isinstance(profiles, list) else []
@@ -451,6 +454,25 @@ def rename_profile(profile_id: str, name: str) -> None:
         for stored in profiles:
             if isinstance(stored, dict) and stored.get("id") == profile_id and stored.get("name") != name:
                 stored["name"] = name
+                changed = True
+        return changed
+
+    update_settings(_mutate)
+
+
+def update_profile_model(profile_id: str, model: str) -> None:
+    """Change le modèle Gemini choisi pour un profil enregistré, sous le
+    verrou inter-processus de settings.json (voir save_profiles). Un profil
+    disparu entre-temps (supprimé par une autre instance) est ignoré sans
+    erreur."""
+    def _mutate(data: dict) -> bool:
+        profiles = data.get("api_profiles", [])
+        if not isinstance(profiles, list):
+            return False
+        changed = False
+        for stored in profiles:
+            if isinstance(stored, dict) and stored.get("id") == profile_id and stored.get("model") != model:
+                stored["model"] = model
                 changed = True
         return changed
 

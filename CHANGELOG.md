@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.2] - 2026-07-22 - Choix du modèle Gemini par profil de clé API, fiabilité des prompts
+
+- Chaque profil de clé API permet désormais de choisir le modèle Gemini utilisé pour les générations (gemini-3.5-flash ou gemini-3.6-flash, un nouveau modèle stable proposé en plus de l'ancien), modifiable à tout moment dans la fenêtre **Profils** ; les compteurs et limites de quota RPM/TPM/RPD sont suivis séparément pour chaque modèle utilisé avec une même clé, sans jamais mélanger leur consommation. Une génération déjà entamée continue toujours avec le modèle utilisé au départ, même si le modèle du profil est changé entre-temps, pour ne jamais mélanger dans une même fiche des résumés produits par deux modèles différents. Le modèle Gemini actuellement utilisé s'affiche sous le nom du profil actif, en haut de la fenêtre principale.
+- Constaté avec gemini-3.6-flash sur un livre volumineux : Gemini pouvait produire un résumé détaillé complet puis s'arrêter sans erreur avant de produire les personnages et l'analyse, laissant ces deux sections vides dans la fiche générée. Les prompts par défaut précisent désormais explicitement que les quatre éléments demandés (résumé court, résumé détaillé, personnages, analyse) sont tous obligatoires et qu'il ne faut jamais s'arrêter en cours de route, quel que soit celui après lequel le modèle serait tenté de le faire.
+
 ## [1.3.1] - 2026-07-22 - Verrouillage multi-instances d'un livre en cours de génération, page web du projet
 
 - Lancer la génération d'un même livre depuis plusieurs fenêtres de Distillat en parallèle (première génération comme reprise d'une génération interrompue) consommait du quota en double et pouvait faire écraser tour à tour le même état de reprise. Un même livre ne peut désormais être généré que dans une seule fenêtre à la fois : les autres refusent avec un message explicite, et la fenêtre listant les livres en attente de reprise au démarrage indique désormais en direct ceux déjà en cours ailleurs (entrée grisée, non sélectionnable).

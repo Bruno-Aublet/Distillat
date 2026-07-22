@@ -58,7 +58,7 @@ from app.update_checker import (
 )
 from app.book_report import BookReport, Character, sanitize_filename
 from app.cover_image import shrink_cover_image
-from app.gemini_client import MODEL_NAME, default_prompt_templates, log_api_event
+from app.gemini_client import AVAILABLE_MODELS, MODEL_NAME, default_prompt_templates, log_api_event
 from app.pdf_export import export_book_report_to_pdf
 from app.prompts_store import load_custom_prompts, reset_custom_prompt, save_custom_prompts
 from app.quota_tracker import QuotaSnapshot, QuotaTracker, save_quota_limits
@@ -284,7 +284,13 @@ class ProfileEditDialog(QDialog):
     Gemini (nom + clé), la clé restant stockée de façon chiffrée via le
     Gestionnaire d'identification Windows (keyring, voir app.config)."""
 
-    def __init__(self, parent=None, current_name: str = "", current_api_key: str | None = None):
+    def __init__(
+        self,
+        parent=None,
+        current_name: str = "",
+        current_api_key: str | None = None,
+        current_model: str = MODEL_NAME,
+    ):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setWindowTitle(tr("profiles_dialog.edit_window_title"))
@@ -322,6 +328,14 @@ class ProfileEditDialog(QDialog):
             tr("profiles_dialog.key_placeholder"),
             current_api_key or "",
         )
+
+        self.model_combo = QComboBox()
+        for model_info in AVAILABLE_MODELS:
+            self.model_combo.addItem(model_info.name)
+        model_index = self.model_combo.findText(current_model)
+        self.model_combo.setCurrentIndex(model_index if model_index >= 0 else 0)
+        form.addRow(tr("profiles_dialog.model_label"), self.model_combo)
+
         layout.addLayout(form)
 
         buttons = QDialogButtonBox()
@@ -336,6 +350,9 @@ class ProfileEditDialog(QDialog):
 
     def api_key(self) -> str:
         return self._key_row.value()
+
+    def profile_model(self) -> str:
+        return self.model_combo.currentText()
 
 
 class _DeselectableListWidget(QListWidget):
@@ -477,7 +494,7 @@ class ProfilesDialog(QDialog):
         # inter-processus de settings.json : un list_profiles() suivi d'un
         # save_profiles() ici perdait le profil ajouté au même moment par une
         # autre instance (course fermée le 2026-07-22).
-        config.add_profile({"id": profile_id, "name": name})
+        config.add_profile({"id": profile_id, "name": name, "model": dialog.profile_model()})
         self._reload_list()
 
     def _on_edit_clicked(self) -> None:
@@ -508,11 +525,17 @@ class ProfilesDialog(QDialog):
         # profil devenu actif ailleurs.
         try:
             current_api_key = config.load_profile_api_key(profile["id"])
-            dialog = ProfileEditDialog(self, current_name=profile["name"], current_api_key=current_api_key)
+            dialog = ProfileEditDialog(
+                self,
+                current_name=profile["name"],
+                current_api_key=current_api_key,
+                current_model=profile.get("model", MODEL_NAME),
+            )
             if dialog.exec_() != QDialog.Accepted:
                 return
             name = dialog.profile_name()
             api_key = dialog.api_key()
+            model = dialog.profile_model()
             if not name or not api_key:
                 QMessageBox.warning(
                     self, tr("profiles_dialog.missing_fields_title"), tr("profiles_dialog.missing_fields_message")
@@ -536,13 +559,15 @@ class ProfilesDialog(QDialog):
                     self, tr("profiles_dialog.save_error_title"), tr("profiles_dialog.save_error_message")
                 )
                 return
-            # config.rename_profile() relit et réécrit la liste sous le verrou
-            # inter-processus de settings.json (voir _on_add_clicked()).
+            # config.rename_profile()/update_profile_model() relisent et
+            # réécrivent la liste sous le verrou inter-processus de
+            # settings.json (voir _on_add_clicked()).
             config.rename_profile(profile["id"], name)
+            config.update_profile_model(profile["id"], model)
             if self.active_profile is not None and self.active_profile["id"] == profile["id"]:
-                self.active_profile = {"id": profile["id"], "name": name}
+                self.active_profile = {"id": profile["id"], "name": name, "model": model}
                 if self._quota_tracker is not None:
-                    self._quota_tracker.switch_api_key(api_key)
+                    self._quota_tracker.switch_context(api_key, model)
         finally:
             if not is_active_here:
                 instance_lock.release_profile_lock(profile["id"])
@@ -606,7 +631,7 @@ class ProfilesDialog(QDialog):
         # le 2026-07-22, même garde-fou que Modifier/Supprimer). Protection
         # locale à CETTE instance uniquement (generation_in_progress vient de
         # self.worker.isRunning() de cette fenêtre, voir _prompt_for_api_key)
-        # : le switch_api_key() ci-dessous rebasculerait aussitôt le suivi de
+        # : le switch_context() ci-dessous rebasculerait aussitôt le suivi de
         # quota sur le fichier de la nouvelle clé alors que le worker de
         # cette même fenêtre continue d'enregistrer les requêtes de la
         # génération en cours (lancée avec l'ancienne clé), créditant le
@@ -640,7 +665,7 @@ class ProfilesDialog(QDialog):
         # ne pas basculer du tout que de laisser l'affichage désynchronisé
         # entre le nom de profil affiché et le compteur de quota affiché.
         if api_key and self._quota_tracker is not None:
-            self._quota_tracker.switch_api_key(api_key)
+            self._quota_tracker.switch_context(api_key, profile.get("model", MODEL_NAME))
         self._reload_list()
 
 
@@ -648,7 +673,14 @@ class QuotaLimitsDialog(QDialog):
     """Boîte de dialogue pour ajuster manuellement les limites RPM/TPM/RPD
     affichées dans l'application, si Google modifie le palier gratuit."""
 
-    def __init__(self, parent=None, current_rpm: int = 0, current_tpm: int = 0, current_rpd: int = 0):
+    def __init__(
+        self,
+        parent=None,
+        current_rpm: int = 0,
+        current_tpm: int = 0,
+        current_rpd: int = 0,
+        model_name: str = MODEL_NAME,
+    ):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setWindowTitle(tr("quota_limits_dialog.window_title"))
@@ -656,7 +688,7 @@ class QuotaLimitsDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        model_label = QLabel(tr("quota_limits_dialog.model_label", model_name=MODEL_NAME))
+        model_label = QLabel(tr("quota_limits_dialog.model_label", model_name=model_name))
         model_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(model_label)
 
@@ -1230,7 +1262,7 @@ class MainWindow(QMainWindow):
         self._last_report_source_path: Path | None = None
         self._report_dirty = False
         # daily_state_path est un chemin provisoire (aucun compte connu tant
-        # qu'aucune génération n'a démarré) : switch_api_key(), appelée dans
+        # qu'aucune génération n'a démarré) : switch_context(), appelée dans
         # _on_summarize_clicked() dès que la clé API est connue, le remplace
         # par le fichier propre à cette clé (un fichier par compte, voir
         # quota_tracker.daily_state_path_for_key() - séparation ajoutée le
@@ -1413,6 +1445,7 @@ class MainWindow(QMainWindow):
         header.addWidget(self.quota_limits_button)
         self.active_profile_label = QLabel()
         self.active_profile_label.setStyleSheet("color: #555;")
+        self.active_profile_label.setAlignment(Qt.AlignCenter)
         header.addWidget(self.active_profile_label)
         self.api_key_button = QPushButton(tr("main_window.profiles_button"))
         self.api_key_button.clicked.connect(self._on_edit_api_key)
@@ -1792,13 +1825,17 @@ class MainWindow(QMainWindow):
                 instance_lock.release_profile_lock(profile["id"])
                 continue
             self.active_profile = profile
-            self.quota_tracker.switch_api_key(api_key)
+            self.quota_tracker.switch_context(api_key, profile.get("model", MODEL_NAME))
             return
 
     def _update_profile_label(self) -> None:
         if self.active_profile is not None:
             self.active_profile_label.setText(
-                tr("main_window.active_profile_label", name=self.active_profile["name"])
+                tr(
+                    "main_window.active_profile_label",
+                    name=self.active_profile["name"],
+                    model=self.active_profile.get("model", MODEL_NAME),
+                )
             )
         else:
             self.active_profile_label.setText(tr("main_window.no_profile_label"))
@@ -1905,11 +1942,13 @@ class MainWindow(QMainWindow):
             )
             return
         snapshot = self.quota_tracker.snapshot()
+        model_name = self.active_profile.get("model", MODEL_NAME) if self.active_profile is not None else MODEL_NAME
         dialog = QuotaLimitsDialog(
             self,
             current_rpm=snapshot.rpm_limit,
             current_tpm=snapshot.tpm_limit,
             current_rpd=snapshot.rpd_limit,
+            model_name=model_name,
         )
         if dialog.exec_() == QDialog.Accepted:
             rpm_limit, tpm_limit, rpd_limit = dialog.limits()
@@ -2202,7 +2241,8 @@ class MainWindow(QMainWindow):
         api_key = self._ensure_api_key(prompt_if_missing=True)
         if not api_key:
             return
-        self.quota_tracker.switch_api_key(api_key)
+        model = self.active_profile.get("model", MODEL_NAME) if self.active_profile is not None else MODEL_NAME
+        self.quota_tracker.switch_context(api_key, model)
 
         resume_state = self._find_resume_state_for(self.selected_book_path)
 
@@ -2260,7 +2300,9 @@ class MainWindow(QMainWindow):
         api_key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:8]
         log_api_event(f"generation DEMARRAGE cle_api_hash={api_key_hash}")
         profile_id = self.active_profile["id"] if self.active_profile is not None else None
-        self.worker = SummarizeWorker(self.selected_book_path, api_key, self.quota_tracker, profile_id, resume_state)
+        self.worker = SummarizeWorker(
+            self.selected_book_path, api_key, self.quota_tracker, profile_id, resume_state, model
+        )
         self.worker.progress.connect(self._on_progress)
         self.worker.quota_updated.connect(self._update_quota_display)
         self.worker.finished_ok.connect(self._on_finished_ok)

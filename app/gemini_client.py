@@ -24,20 +24,47 @@ from app.quota_tracker import QuotaSnapshot, QuotaTracker
 # modèle Flash generally available (non-preview) qui lui succède.
 MODEL_NAME = "gemini-3.5-flash"
 
-# Marge de sécurité : on vise à rester sous la fenêtre de contexte du modèle
-# pour laisser de la place au prompt système et à la réponse.
-MAX_INPUT_TOKENS = 900_000
 
-# Limite de débit du palier gratuit (tokens par minute), constatée sur
-# https://aistudio.google.com/rate-limit pour gemini-3.5-flash (250 000 au
-# 19/07/2026, cf. app/quota_tracker.py). C'est elle, et non MAX_INPUT_TOKENS
-# (la fenêtre de contexte du modèle, bien plus large), qui doit dimensionner
-# une requête envoyée en une fois : une requête de plusieurs centaines de
-# milliers de tokens tient dans le modèle mais sature le TPM à elle seule et
-# déclenche une erreur 429, même si c'est la toute première requête envoyée.
-# Marge de sécurité sous la vraie limite (250 000) pour absorber l'écart
-# entre le tokenizer local (count_tokens) et le décompte serveur exact.
-MAX_TOKENS_PER_REQUEST = 200_000
+@dataclass(frozen=True)
+class ModelInfo:
+    """Caractéristiques d'un modèle Gemini proposé au choix par profil (voir
+    app/config.py, champ "model" du profil). max_input_tokens est la fenêtre
+    de contexte du modèle (marge de sécurité sous la vraie limite, pour
+    laisser de la place au prompt système et à la réponse) ; c'est
+    max_tokens_per_request, et non max_input_tokens, qui doit dimensionner une
+    requête envoyée en une fois : une requête de plusieurs centaines de
+    milliers de tokens tient dans la fenêtre de contexte mais sature le TPM à
+    elle seule et déclenche une erreur 429, même si c'est la toute première
+    requête envoyée. max_tokens_per_request garde une marge sous la vraie
+    limite TPM constatée (voir aistudio.google.com/rate-limit) pour absorber
+    l'écart entre le tokenizer local (count_tokens) et le décompte serveur
+    exact."""
+
+    name: str
+    max_input_tokens: int
+    max_tokens_per_request: int
+
+
+# gemini-3.5-flash et gemini-3.6-flash partagent actuellement les mêmes
+# caractéristiques (fenêtre de contexte 1 048 576 tokens officielle, TPM
+# gratuit 250 000 constaté au 19/07/2026 pour les deux modèles sur
+# aistudio.google.com/rate-limit) : les valeurs ci-dessous sont donc
+# volontairement identiques pour les deux entrées, pas par oubli. À revoir si
+# un futur modèle aux caractéristiques différentes est ajouté à cette liste.
+AVAILABLE_MODELS: list[ModelInfo] = [
+    ModelInfo(name="gemini-3.5-flash", max_input_tokens=900_000, max_tokens_per_request=200_000),
+    ModelInfo(name="gemini-3.6-flash", max_input_tokens=900_000, max_tokens_per_request=200_000),
+]
+
+
+def get_model_info(model_name: str) -> ModelInfo:
+    """Résout un nom de modèle vers ses caractéristiques. Repli sur le premier
+    modèle de AVAILABLE_MODELS si le nom ne correspond à aucune entrée connue
+    (ex. modèle stocké dans un vieux profil, retiré de la liste depuis)."""
+    for model_info in AVAILABLE_MODELS:
+        if model_info.name == model_name:
+            return model_info
+    return AVAILABLE_MODELS[0]
 
 ProgressCallback = Callable[[int, int, str], None]
 QuotaCallback = Callable[[QuotaSnapshot], None]
@@ -208,7 +235,7 @@ _JSON_GENERATION_CONFIG = genai_types.GenerateContentConfig(response_mime_type="
 _COUNT_TOKENS_CONFIG = genai_types.CountTokensConfig(http_options=genai_types.HttpOptions())
 
 
-def count_tokens(text: str, context_label: str = "") -> int:
+def count_tokens(text: str, context_label: str = "", model: str = MODEL_NAME) -> int:
     """Appel réseau CountTokens (gratuit, quota séparé de generateContent,
     voir ARCHITECTURE.md). Journalisé comme les appels de génération pour
     pouvoir corréler chaque appel réseau de l'application avec le dashboard
@@ -216,7 +243,7 @@ def count_tokens(text: str, context_label: str = "") -> int:
     start = time.monotonic()
     _api_call_totals["count_tokens"] += 1
     try:
-        result = _client.models.count_tokens(model=MODEL_NAME, contents=text, config=_COUNT_TOKENS_CONFIG)
+        result = _client.models.count_tokens(model=model, contents=text, config=_COUNT_TOKENS_CONFIG)
     except Exception as exc:
         _log_api_call(
             f"count_tokens ECHEC contexte={context_label} {type(exc).__name__}: {_one_line(exc)} "
@@ -231,28 +258,33 @@ def count_tokens(text: str, context_label: str = "") -> int:
     return result.total_tokens
 
 
-def _split_chapters_into_batches(chapters: list[Chapter]) -> list[tuple[list[Chapter], int]]:
+def _split_chapters_into_batches(
+    chapters: list[Chapter], model: str = MODEL_NAME
+) -> list[tuple[list[Chapter], int]]:
     """Regroupe les chapitres en lots dont le texte cumulé tient sous
-    MAX_TOKENS_PER_REQUEST, la limite de débit par minute du palier gratuit
-    (et non MAX_INPUT_TOKENS, la fenêtre de contexte du modèle, bien plus
-    large - un lot dimensionné sur cette dernière saturerait le quota TPM à
-    lui seul). Un chapitre dont le texte dépasse à lui seul
-    MAX_TOKENS_PER_REQUEST forme son propre lot (l'appel Gemini correspondant
-    échouera probablement, mais ce n'est pas à cette fonction de tronquer le
-    contenu du livre).
+    max_tokens_per_request (voir ModelInfo), la limite de débit par minute du
+    palier gratuit du modèle utilisé (et non max_input_tokens, la fenêtre de
+    contexte du modèle, bien plus large - un lot dimensionné sur cette
+    dernière saturerait le quota TPM à lui seul). Un chapitre dont le texte
+    dépasse à lui seul max_tokens_per_request forme son propre lot (l'appel
+    Gemini correspondant échouera probablement, mais ce n'est pas à cette
+    fonction de tronquer le contenu du livre).
 
     Chaque lot est retourné avec le compte de tokens de son texte source déjà
     calculé ici (estimation du prompt final, qui ajoute aussi les consignes du
     template) : réutilisé tel quel par l'appelant pour créditer le suivi de
     quota si l'appel Gemini correspondant échoue, sans refaire d'appel
     count_tokens (donc sans appel réseau) juste pour ça."""
+    max_tokens_per_request = get_model_info(model).max_tokens_per_request
     batches: list[tuple[list[Chapter], int]] = []
     current_batch: list[Chapter] = []
     current_tokens = 0
 
     for chapter_index, chapter in enumerate(chapters, start=1):
-        chapter_tokens = count_tokens(chapter.text, f"decoupage_chapitre_{chapter_index}/{len(chapters)}")
-        if current_batch and current_tokens + chapter_tokens > MAX_TOKENS_PER_REQUEST:
+        chapter_tokens = count_tokens(
+            chapter.text, f"decoupage_chapitre_{chapter_index}/{len(chapters)}", model=model
+        )
+        if current_batch and current_tokens + chapter_tokens > max_tokens_per_request:
             batches.append((current_batch, current_tokens))
             current_batch = []
             current_tokens = 0
@@ -378,6 +410,7 @@ def _call_gemini(
     on_quota_update: QuotaCallback | None = None,
     estimated_input_tokens: int = 0,
     context_label: str = "",
+    model: str = MODEL_NAME,
 ) -> tuple[str, str | None]:
     """Effectue un seul appel à l'API Gemini, sans retry automatique : toute
     erreur (quota, service indisponible...) remonte immédiatement sous forme
@@ -425,7 +458,7 @@ def _call_gemini(
             # retry par défaut restait actif). Sans lui, un appel applicatif
             # = exactement une requête serveur.
             config = _JSON_GENERATION_CONFIG if json_mode else None
-            response = _client.models.generate_content(model=MODEL_NAME, contents=prompt, config=config)
+            response = _client.models.generate_content(model=model, contents=prompt, config=config)
             usage = response.usage_metadata
             # candidates_token_count peut être None (constaté le 2026-07-21
             # avec google-genai sur une réponse très courte), contrairement à
@@ -478,7 +511,10 @@ DEFAULT_FULL_REPORT_PROMPT = """Tu es un assistant expert en littérature. Voici
 intitulé "{book_title}" de {author}.
 
 Produis TOUJOURS EN FRANÇAIS, quelle que soit la langue originale du texte, les quatre éléments \
-suivants :
+suivants. Les quatre sont OBLIGATOIRES et de même importance : ne t'arrête JAMAIS en cours de route \
+après avoir produit seulement un, deux ou trois d'entre eux, quel que soit celui après lequel tu \
+serais tenté de t'arrêter - tu dois toujours aller jusqu'au bout des quatre, y compris les \
+personnages/entités et l'analyse, même si le résumé détaillé t'a déjà pris beaucoup de place :
 
 1. Un RÉSUMÉ COURT (deux à trois paragraphes maximum, pas plus) donnant une vue d'ensemble concise de \
 l'intrigue ou du propos, du début à la fin.
@@ -507,7 +543,9 @@ couvrant les thèmes principaux, le style d'écriture et la construction narrati
 de l'œuvre - développée et argumentée, sans répéter le contenu déjà couvert par les résumés.
 
 Réponds STRICTEMENT avec un objet JSON valide, sans aucun texte avant ou après, ni fences \
-markdown, au format exact :
+markdown, au format exact. Les quatre champs ci-dessous sont tous obligatoires : ne renvoie \
+jamais "characters" vide ou "analysis" vide, quel que soit le nombre de mots déjà produits pour \
+les champs précédents :
 {{
   "summary": "Le résumé court ici, en français...",
   "detailed_summary": "Le résumé détaillé et développé ici, en français...",
@@ -520,7 +558,8 @@ Texte du livre :
 {full_text}
 ---
 
-Réponds uniquement avec l'objet JSON."""
+Réponds uniquement avec l'objet JSON, avec les quatre champs "summary", "detailed_summary", \
+"characters" et "analysis" tous renseignés."""
 
 
 DEFAULT_CHAPTER_SUMMARY_PROMPT = """Tu résumes des chapitres du livre "{book_title}" de {author}.
@@ -558,7 +597,11 @@ Résumés par chapitre :
 {chapter_summaries}
 ---
 
-À partir de ces résumés partiels, TOUJOURS EN FRANÇAIS, produis les quatre éléments suivants :
+À partir de ces résumés partiels, TOUJOURS EN FRANÇAIS, produis les quatre éléments suivants. Les \
+quatre sont OBLIGATOIRES et de même importance : ne t'arrête JAMAIS en cours de route après avoir \
+produit seulement un, deux ou trois d'entre eux, quel que soit celui après lequel tu serais tenté \
+de t'arrêter - tu dois toujours aller jusqu'au bout des quatre, y compris les personnages/entités \
+et l'analyse, même si le résumé détaillé t'a déjà pris beaucoup de place :
 
 1. Un RÉSUMÉ COURT (deux à trois paragraphes maximum, pas plus) donnant une vue d'ensemble concise de \
 l'intrigue du début à la fin.
@@ -585,7 +628,9 @@ couvrant les thèmes principaux, le style d'écriture et la construction narrati
 de l'œuvre - développée et argumentée, sans répéter le contenu déjà couvert par les résumés.
 
 Réponds STRICTEMENT avec un objet JSON valide, sans aucun texte avant ou après, ni fences \
-markdown, au format exact :
+markdown, au format exact. Les quatre champs ci-dessous sont tous obligatoires : ne renvoie \
+jamais "characters" vide ou "analysis" vide, quel que soit le nombre de mots déjà produits pour \
+les champs précédents :
 {{
   "summary": "Le résumé court ici, en français...",
   "detailed_summary": "Le résumé détaillé et développé ici, en français...",
@@ -593,14 +638,18 @@ markdown, au format exact :
   "analysis": "L'analyse littéraire ici, en français..."
 }}
 
-Réponds uniquement avec l'objet JSON."""
+Réponds uniquement avec l'objet JSON, avec les quatre champs "summary", "detailed_summary", \
+"characters" et "analysis" tous renseignés."""
 
 
 DEFAULT_FULL_REPORT_PROMPT_EN = """You are an expert literary assistant. Here is the full text of a book \
 titled "{book_title}" by {author}.
 
 Produce ALWAYS IN ENGLISH, regardless of the original language of the text, the following four \
-elements:
+elements. All four are MANDATORY and equally important: NEVER stop partway through after producing \
+only one, two, or three of them, no matter which one you might be tempted to stop after - you must \
+always go all the way through all four, including the characters/entities and the analysis, even if \
+the detailed summary has already taken up a lot of space:
 
 1. A SHORT SUMMARY (two to three paragraphs maximum, no more) giving a concise overview of the plot \
 or subject, from beginning to end.
@@ -627,7 +676,9 @@ covering the main themes, the writing style and narrative construction, then the
 - developed and well-argued, without repeating content already covered by the summaries.
 
 Respond STRICTLY with a valid JSON object, with no text whatsoever before or after, no markdown \
-fences, in the exact format:
+fences, in the exact format. All four fields below are mandatory: never return an empty \
+"characters" or an empty "analysis", no matter how many words you have already produced for the \
+preceding fields:
 {{
   "summary": "The short summary here, in English...",
   "detailed_summary": "The detailed, developed summary here, in English...",
@@ -640,7 +691,8 @@ Book text:
 {full_text}
 ---
 
-Respond only with the JSON object."""
+Respond only with the JSON object, with all four fields "summary", "detailed_summary", \
+"characters" and "analysis" filled in."""
 
 
 DEFAULT_CHAPTER_SUMMARY_PROMPT_EN = """You are summarizing chapters of the book "{book_title}" by {author}.
@@ -677,7 +729,11 @@ Chapter summaries:
 {chapter_summaries}
 ---
 
-From these partial summaries, ALWAYS IN ENGLISH, produce the following four elements:
+From these partial summaries, ALWAYS IN ENGLISH, produce the following four elements. All four are \
+MANDATORY and equally important: NEVER stop partway through after producing only one, two, or three \
+of them, no matter which one you might be tempted to stop after - you must always go all the way \
+through all four, including the characters/entities and the analysis, even if the detailed summary \
+has already taken up a lot of space:
 
 1. A SHORT SUMMARY (two to three paragraphs maximum, no more) giving a concise overview of the plot \
 from beginning to end.
@@ -702,7 +758,9 @@ covering the main themes, the writing style and narrative construction, then the
 - developed and well-argued, without repeating content already covered by the summaries.
 
 Respond STRICTLY with a valid JSON object, with no text whatsoever before or after, no markdown \
-fences, in the exact format:
+fences, in the exact format. All four fields below are mandatory: never return an empty \
+"characters" or an empty "analysis", no matter how many words you have already produced for the \
+preceding fields:
 {{
   "summary": "The short summary here, in English...",
   "detailed_summary": "The detailed, developed summary here, in English...",
@@ -710,7 +768,8 @@ fences, in the exact format:
   "analysis": "The literary analysis here, in English..."
 }}
 
-Respond only with the JSON object."""
+Respond only with the JSON object, with all four fields "summary", "detailed_summary", \
+"characters" and "analysis" filled in."""
 
 
 DEFAULT_PROMPT_TEMPLATES_FR = {
@@ -1142,6 +1201,7 @@ def generate_book_report(
     profile_id: str | None = None,
     resume_chapter_summaries: list[tuple[str, str]] | None = None,
     resume_batches_done: int = 0,
+    model: str = MODEL_NAME,
 ) -> BookReport:
     """Génère à la suite le résumé, les fiches personnages et l'analyse littéraire
     du livre. Le résumé est produit directement si le livre tient dans une seule
@@ -1165,7 +1225,7 @@ def generate_book_report(
     _reset_api_call_totals()
     _trim_api_requests_log()
     _log_api_call(
-        f"generation DEBUT version={VERSION} livre={_one_line(content.book_title)} modele={MODEL_NAME} "
+        f"generation DEBUT version={VERSION} livre={_one_line(content.book_title)} modele={model} "
         f"reprise_lots_deja_faits={resume_batches_done} "
         f"requetes_jour_avant={quota_tracker.snapshot().requests_today}"
     )
@@ -1179,6 +1239,7 @@ def generate_book_report(
             profile_id=profile_id,
             resume_chapter_summaries=resume_chapter_summaries,
             resume_batches_done=resume_batches_done,
+            model=model,
         )
     except Exception:
         _log_api_call(
@@ -1204,6 +1265,7 @@ def _generate_book_report_impl(
     profile_id: str | None = None,
     resume_chapter_summaries: list[tuple[str, str]] | None = None,
     resume_batches_done: int = 0,
+    model: str = MODEL_NAME,
 ) -> BookReport:
     def report(done: int, total: int, message: str) -> None:
         if on_progress:
@@ -1221,13 +1283,14 @@ def _generate_book_report_impl(
             on_quota_update=on_quota_update,
             estimated_input_tokens=estimated_input_tokens,
             context_label=context_label,
+            model=model,
         )
 
     report(0, 1, tr("gemini_progress.counting_tokens"))
-    token_count = count_tokens(content.full_text, "texte_integral")
+    token_count = count_tokens(content.full_text, "texte_integral", model=model)
     leftovers: list[str] = []
 
-    if token_count <= MAX_TOKENS_PER_REQUEST:
+    if token_count <= get_model_info(model).max_tokens_per_request:
         # Cas le plus courant : le texte tient sous la limite de débit par minute
         # (TPM) du palier gratuit, donc les deux résumés, personnages et analyse
         # sont demandés en une seule requête pour limiter la consommation de quota.
@@ -1252,16 +1315,17 @@ def _generate_book_report_impl(
         # lot est résumé séparément, puis UNE SEULE requête finale reçoit tous
         # les résumés de chapitre et produit le résumé court, le résumé
         # détaillé, les personnages et l'analyse littéraire.
-        batches = _split_chapters_into_batches(content.chapters)
+        batches = _split_chapters_into_batches(content.chapters, model=model)
 
         if len(batches) == 1 and not resume_chapter_summaries:
             # count_tokens(full_text) mesuré en bloc peut dépasser
-            # MAX_TOKENS_PER_REQUEST alors que la somme des comptages par
-            # chapitre (utilisée par _split_chapters_into_batches) tient en un
-            # seul lot : écart de mesure du tokenizer, pas un vrai dépassement
-            # (MAX_TOKENS_PER_REQUEST garde 50 000 tokens de marge sous la
-            # vraie limite TPM de 250 000, largement suffisant pour absorber
-            # cet écart et les instructions ajoutées par le prompt full_report).
+            # max_tokens_per_request (ModelInfo) alors que la somme des
+            # comptages par chapitre (utilisée par
+            # _split_chapters_into_batches) tient en un seul lot : écart de
+            # mesure du tokenizer, pas un vrai dépassement (max_tokens_per_request
+            # garde 50 000 tokens de marge sous la vraie limite TPM de 250 000,
+            # largement suffisant pour absorber cet écart et les instructions
+            # ajoutées par le prompt full_report).
             # Dans ce cas, traiter comme le mode une seule requête plutôt que
             # d'enchaîner résumé-de-lot puis consolidation : même résultat,
             # une requête Gemini économisée sur un quota quotidien serré.
@@ -1344,7 +1408,7 @@ def _generate_book_report_impl(
             raw_text, finish_reason = call(
                 consolidation_prompt,
                 "consolidation",
-                estimated_input_tokens=count_tokens(consolidation_prompt, "consolidation"),
+                estimated_input_tokens=count_tokens(consolidation_prompt, "consolidation", model=model),
             )
             summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
                 raw_text, "consolidation", finish_reason=finish_reason

@@ -6,7 +6,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 from app import config, epub_parser, gemini_client, generation_resume, instance_lock, pdf_parser
 from app.book_report import BookReport
 from app.epub_parser import BookContent
-from app.gemini_client import GeminiError, PartialGenerationError
+from app.gemini_client import MODEL_NAME, GeminiError, PartialGenerationError
 from app.generation_resume import ResumeState
 from app.i18n import tr
 from app.quota_tracker import QuotaSnapshot, QuotaTracker
@@ -36,6 +36,7 @@ class SummarizeWorker(QThread):
         quota_tracker: QuotaTracker,
         profile_id: str | None = None,
         resume_state: ResumeState | None = None,
+        model: str = MODEL_NAME,
         parent=None,
     ):
         super().__init__(parent)
@@ -44,6 +45,7 @@ class SummarizeWorker(QThread):
         self.quota_tracker = quota_tracker
         self.profile_id = profile_id
         self.resume_state = resume_state
+        self.model = model
         # Hash du livre dont ce worker détient actuellement le verrou de
         # génération (voir instance_lock.acquire_book_lock), None sinon. Lu
         # par main_window après un terminate() (fermeture de la fenêtre en
@@ -80,9 +82,16 @@ class SummarizeWorker(QThread):
 
             resume_summaries = None
             resume_batches_done = 0
+            # Le modèle d'une reprise en cours prime sur le modèle
+            # actuellement actif du profil (self.model) : une génération déjà
+            # entamée avec un modèle continue avec ce même modèle jusqu'à son
+            # terme, pour ne jamais mélanger dans une même fiche des résumés
+            # de chapitres produits par deux modèles différents (2026-07-22).
+            effective_model = self.model
             if self.resume_state is not None and self.resume_state.book_hash == book_hash:
                 resume_summaries = self.resume_state.chapter_summaries
                 resume_batches_done = self.resume_state.batches_done
+                effective_model = self.resume_state.model
 
             result: BookReport = gemini_client.generate_book_report(
                 content,
@@ -92,6 +101,7 @@ class SummarizeWorker(QThread):
                 profile_id=self.profile_id,
                 resume_chapter_summaries=resume_summaries,
                 resume_batches_done=resume_batches_done,
+                model=effective_model,
             )
             generation_resume.clear_resume_state(settings_dir, book_hash)
             self.finished_ok.emit(result)
@@ -104,6 +114,7 @@ class SummarizeWorker(QThread):
                     chapter_summaries=exc.chapter_summaries,
                     batches_done=exc.batches_done,
                     batches_total=exc.batches_total,
+                    model=effective_model,
                 ),
             )
             self.failed.emit(str(exc), exc.error_kind)

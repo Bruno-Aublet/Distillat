@@ -48,6 +48,14 @@ RPD_LIMIT = DEFAULT_RPD_LIMIT
 _WINDOW_SECONDS = 60.0
 _LEGACY_DAILY_STATE_FILENAME = ".quota_state.json"
 _LEGACY_QUOTA_LIMITS_FILENAME = "quota_limits.json"
+# Modèle utilisé par l'application avant l'introduction du choix de modèle
+# par profil (2026-07-22) : seul modèle ayant pu produire les anciens
+# fichiers de quota par clé sans suffixe de modèle (.quota_state_<hash>.json,
+# quota_limits_<hash>.json). Valeur figée volontairement (pas un import de
+# app.gemini_client.MODEL_NAME, qui créerait un cycle d'imports entre les
+# deux modules et pourrait changer de valeur par défaut à l'avenir sans que
+# ce repère historique doive changer avec elle).
+_LEGACY_DEFAULT_MODEL = "gemini-3.5-flash"
 
 
 def api_key_hash(api_key: str) -> str:
@@ -58,24 +66,37 @@ def api_key_hash(api_key: str) -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:8]
 
 
-def daily_state_path_for_key(settings_dir: Path, api_key: str) -> Path:
-    """Chemin du fichier de compteur quotidien (RPD) propre à une clé API
-    donnée : un fichier par compte, pour ne jamais mélanger le quota de deux
-    clés différentes utilisées sur la même machine (bug constaté le
-    2026-07-21 en testant avec plusieurs comptes Google : le compteur
-    continuait d'accumuler sur l'ancien fichier unique .quota_state.json
-    quel que soit le compte réellement utilisé pour la génération)."""
-    return settings_dir / f".quota_state_{api_key_hash(api_key)}.json"
+def model_slug(model: str) -> str:
+    """Nom de modèle rendu sûr pour un nom de fichier (les points de
+    "gemini-3.5-flash" ne posent pas problème sur Windows, mais on les
+    normalise quand même pour rester cohérent avec un futur nom de modèle qui
+    en contiendrait d'autres)."""
+    return model.replace(".", "-")
 
 
-def quota_limits_path_for_key(settings_dir: Path, api_key: str) -> Path:
-    """Chemin du fichier de limites RPM/TPM/RPD propre à une clé API donnée :
-    un fichier par compte (comme daily_state_path_for_key ci-dessus), pour
-    que deux comptes Google avec des paliers différents (gratuit standard,
-    payant...) puissent avoir des limites configurées différentes, plutôt que
-    de partager un seul quota_limits.json global (2026-07-22, support des
-    profils multiples, voir app/instance_lock.py)."""
-    return settings_dir / f"quota_limits_{api_key_hash(api_key)}.json"
+def daily_state_path_for_key(settings_dir: Path, api_key: str, model: str) -> Path:
+    """Chemin du fichier de compteur quotidien (RPD) propre à une clé API ET
+    un modèle donnés : un fichier par (compte, modèle), pour ne jamais
+    mélanger le quota de deux clés différentes utilisées sur la même machine
+    (bug constaté le 2026-07-21 en testant avec plusieurs comptes Google : le
+    compteur continuait d'accumuler sur l'ancien fichier unique
+    .quota_state.json quel que soit le compte réellement utilisé pour la
+    génération), ni celui de deux modèles différents utilisés avec la même
+    clé (2026-07-22, introduction du choix de modèle par profil : chaque
+    modèle a ses propres compteurs, même s'ils partagent aujourd'hui les
+    mêmes limites)."""
+    return settings_dir / f".quota_state_{api_key_hash(api_key)}_{model_slug(model)}.json"
+
+
+def quota_limits_path_for_key(settings_dir: Path, api_key: str, model: str) -> Path:
+    """Chemin du fichier de limites RPM/TPM/RPD propre à une clé API ET un
+    modèle donnés (comme daily_state_path_for_key ci-dessus), pour que deux
+    comptes Google avec des paliers différents (gratuit standard, payant...),
+    ou deux modèles aux limites différentes utilisés avec la même clé,
+    puissent avoir des limites configurées indépendamment, plutôt que de
+    partager un seul fichier (2026-07-22, support des profils multiples puis
+    du choix de modèle par profil, voir app/instance_lock.py)."""
+    return settings_dir / f"quota_limits_{api_key_hash(api_key)}_{model_slug(model)}.json"
 
 
 def load_quota_limits(limits_path: Path) -> tuple[int, int, int]:
@@ -140,7 +161,7 @@ class QuotaTracker:
     _tpm_limit: int = DEFAULT_TPM_LIMIT
     _rpd_limit: int = DEFAULT_RPD_LIMIT
     _requests_in_flight: int = 0
-    _api_key_hash: str | None = None
+    _context_key: tuple[str, str] | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
@@ -155,31 +176,34 @@ class QuotaTracker:
             with self._lock:
                 self._rpm_limit, self._tpm_limit, self._rpd_limit = load_quota_limits(self.quota_limits_path)
 
-    def switch_api_key(self, api_key: str) -> QuotaSnapshot:
-        """À appeler dès que la clé API à utiliser pour la prochaine
-        génération est connue (avant de lancer le worker), pour pointer le
-        suivi de quota sur le fichier propre à cette clé plutôt que de
-        continuer à accumuler sur l'état d'une clé précédente. Sans effet si
-        la clé n'a pas changé depuis le dernier appel (ou l'initialisation) :
-        ne recharge/ne réinitialise alors rien, pour ne pas perdre l'état en
-        mémoire d'une génération déjà en cours avec la même clé. L'état en
-        mémoire (tokens cumulés, fenêtre glissante RPM, requêtes en vol) est
-        remis à zéro avant de recharger le compteur RPD persistant du
-        nouveau fichier : ces valeurs n'ont aucun sens pour un autre compte.
-        Les limites RPM/TPM/RPD configurées sont elles aussi rechargées
-        depuis le fichier propre à cette clé (quota_limits_<hash>.json,
-        2026-07-22), pour le cas où deux comptes auraient des paliers
-        différents (gratuit standard, payant...)."""
+    def switch_context(self, api_key: str, model: str) -> QuotaSnapshot:
+        """À appeler dès que la clé API et le modèle à utiliser pour la
+        prochaine génération sont connus (avant de lancer le worker), pour
+        pointer le suivi de quota sur le fichier propre à cette combinaison
+        (clé, modèle) plutôt que de continuer à accumuler sur l'état d'un
+        contexte précédent. Sans effet si ni la clé ni le modèle n'ont changé
+        depuis le dernier appel (ou l'initialisation) : ne recharge/ne
+        réinitialise alors rien, pour ne pas perdre l'état en mémoire d'une
+        génération déjà en cours avec le même contexte. L'état en mémoire
+        (tokens cumulés, fenêtre glissante RPM, requêtes en vol) est remis à
+        zéro avant de recharger le compteur RPD persistant du nouveau
+        fichier : ces valeurs n'ont aucun sens pour un autre compte ou un
+        autre modèle. Les limites RPM/TPM/RPD configurées sont elles aussi
+        rechargées depuis le fichier propre à ce contexte
+        (quota_limits_<hash>_<modele>.json), pour le cas où deux comptes ou
+        deux modèles auraient des paliers différents (gratuit standard,
+        payant..., 2026-07-22 : quotas séparés par modèle au sein d'un même
+        profil)."""
         with self._lock:
-            new_hash = api_key_hash(api_key)
-            if new_hash == self._api_key_hash:
+            new_key = (api_key_hash(api_key), model)
+            if new_key == self._context_key:
                 return self._snapshot_locked()
-            self._api_key_hash = new_hash
+            self._context_key = new_key
             if self.settings_dir is not None:
-                self.daily_state_path = daily_state_path_for_key(self.settings_dir, api_key)
-                self._migrate_legacy_daily_state_if_needed()
-                self.quota_limits_path = quota_limits_path_for_key(self.settings_dir, api_key)
-                self._migrate_legacy_quota_limits_if_needed()
+                self.daily_state_path = daily_state_path_for_key(self.settings_dir, api_key, model)
+                self._migrate_legacy_daily_state_if_needed(api_key, model)
+                self.quota_limits_path = quota_limits_path_for_key(self.settings_dir, api_key, model)
+                self._migrate_legacy_quota_limits_if_needed(api_key, model)
                 self._rpm_limit, self._tpm_limit, self._rpd_limit = load_quota_limits(self.quota_limits_path)
             self.input_tokens_total = 0
             self.output_tokens_total = 0
@@ -210,18 +234,29 @@ class QuotaTracker:
         except OSError:
             pass
 
-    def _migrate_legacy_daily_state_if_needed(self) -> None:
-        """Reprend l'ancien fichier de compteur unique .quota_state.json (non
-        distingué par clé API, avant ce fix) vers le fichier de la clé
-        actuellement sélectionnée, uniquement si celui-ci n'existe pas encore
-        - pour ne pas perdre le compteur du jour au premier lancement suivant
-        cette mise à jour, sans jamais écraser un fichier par-clé déjà créé.
-        Ne migre qu'une fois : l'ancien fichier est renommé (donc absent) dès
-        la première clé utilisée après la mise à jour ; toute clé suivante
-        démarre normalement de zéro puisqu'aucune trace de sa consommation
-        n'existait avant la séparation par clé."""
+    def _migrate_legacy_daily_state_if_needed(self, api_key: str, model: str) -> None:
+        """Reprend, vers le fichier (clé, modèle) actuellement sélectionné et
+        uniquement si celui-ci n'existe pas encore, le compteur d'un ancien
+        format plus large : soit le fichier unique .quota_state.json (non
+        distingué par clé API, avant le fix du 2026-07-21), soit le fichier
+        par clé sans modèle .quota_state_<hash>.json (avant l'introduction du
+        choix de modèle par profil le 2026-07-22, seul gemini-3.5-flash
+        existait alors) - migré uniquement si le modèle actuellement
+        sélectionné est celui par défaut (MODEL_NAME), le seul qui ait pu
+        produire ce fichier. Ne migre qu'une fois par ancien fichier (renommé,
+        donc absent ensuite) ; tout contexte (clé, modèle) suivant démarre
+        normalement de zéro puisqu'aucune trace de sa consommation n'existait
+        avant sa séparation."""
         if self.settings_dir is None or self.daily_state_path.exists():
             return
+        if model == _LEGACY_DEFAULT_MODEL:
+            legacy_per_key_path = self.settings_dir / f".quota_state_{api_key_hash(api_key)}.json"
+            if legacy_per_key_path.exists():
+                try:
+                    legacy_per_key_path.replace(self.daily_state_path)
+                    return
+                except OSError:
+                    pass
         legacy_path = self.settings_dir / _LEGACY_DAILY_STATE_FILENAME
         if not legacy_path.exists():
             return
@@ -230,15 +265,26 @@ class QuotaTracker:
         except OSError:
             pass
 
-    def _migrate_legacy_quota_limits_if_needed(self) -> None:
-        """Reprend l'ancien fichier de limites unique quota_limits.json (non
-        distingué par clé API, avant ce fix du 2026-07-22) vers le fichier de
-        la clé actuellement sélectionnée, uniquement si celui-ci n'existe pas
-        encore - même logique que _migrate_legacy_daily_state_if_needed()
-        ci-dessus (renommage, pas de copie : ne migre qu'une fois, vers la
-        première clé utilisée après cette mise à jour)."""
+    def _migrate_legacy_quota_limits_if_needed(self, api_key: str, model: str) -> None:
+        """Reprend, vers le fichier (clé, modèle) actuellement sélectionné et
+        uniquement si celui-ci n'existe pas encore, les limites d'un ancien
+        format plus large : soit le fichier unique quota_limits.json (non
+        distingué par clé API, avant le fix du 2026-07-22), soit le fichier
+        par clé sans modèle quota_limits_<hash>.json (avant l'introduction du
+        choix de modèle par profil, même jour) - même logique que
+        _migrate_legacy_daily_state_if_needed() ci-dessus (renommage, pas de
+        copie : ne migre qu'une fois, et seulement vers le modèle par défaut
+        MODEL_NAME, le seul qui ait pu produire ces anciens fichiers)."""
         if self.settings_dir is None or self.quota_limits_path is None or self.quota_limits_path.exists():
             return
+        if model == _LEGACY_DEFAULT_MODEL:
+            legacy_per_key_path = self.settings_dir / f"quota_limits_{api_key_hash(api_key)}.json"
+            if legacy_per_key_path.exists():
+                try:
+                    legacy_per_key_path.replace(self.quota_limits_path)
+                    return
+                except OSError:
+                    pass
         legacy_path = self.settings_dir / _LEGACY_QUOTA_LIMITS_FILENAME
         if not legacy_path.exists():
             return

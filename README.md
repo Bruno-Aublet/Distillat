@@ -12,7 +12,9 @@ simplement votre fichier EPUB ou PDF dans la zone prévue à cet effet : vous
 obtenez un résumé, des fiches de personnages et une analyse de l'oeuvre,
 prêts à consulter ou à exporter en PDF.
 
-L'application s'appuie sur le palier gratuit de Gemini 3.5 Flash.
+L'application s'appuie sur le palier gratuit de Gemini (Flash), avec un choix
+possible entre plusieurs modèles selon le profil de clé API utilisé (voir
+[Suivi des quotas](#suivi-des-quotas)).
 
 **Confidentialité** : le texte du livre est envoyé à l'API Gemini pour générer
 la fiche, et Google peut utiliser les contenus soumis via le palier gratuit
@@ -23,7 +25,7 @@ confidentiels.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.3.1**
+**Version 1.3.2**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
@@ -152,7 +154,9 @@ des comptes différents : chaque instance se voit attribuer automatiquement,
 ouverte sur le même ordinateur, sans manipulation manuelle. Deux profils ne
 peuvent pas partager le même nom ni la même clé API ; un profil actif dans
 une instance ne peut pas être modifié ou supprimé depuis une autre instance,
-ni pendant qu'une génération est en cours avec lui. Les prompts personnalisés
+ni pendant qu'une génération est en cours avec lui. Chaque profil permet
+aussi de choisir le modèle Gemini utilisé (voir
+[Suivi des quotas](#suivi-des-quotas)). Les prompts personnalisés
 et les limites de quota RPM/TPM/RPD personnalisées (voir plus bas) sont
 propres à chaque profil. Un bouton dédié, à droite du titre en haut de la
 fenêtre, permet d'ouvrir directement une nouvelle instance de Distillat sans
@@ -188,8 +192,9 @@ quota supplémentaire).
 
 ## Suivi des quotas
 
-Distillat utilise le modèle `gemini-3.5-flash`, dont le palier gratuit est
-limité à :
+Chaque profil de clé API permet de choisir le modèle Gemini utilisé parmi une
+liste (`gemini-3.5-flash` ou `gemini-3.6-flash` à ce jour), via le bouton
+**Profils**. Le palier gratuit de ces deux modèles est actuellement identique :
 
 | Limite | Valeur |
 | --- | --- |
@@ -203,7 +208,10 @@ via l'API, ils **varient d'un compte à l'autre et peuvent changer dans le
 temps**. Vérifiez les vôtres sur
 [aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit) et
 ajustez-les si besoin via le bouton **Limites de quota** de l'application ;
-elles sont alors enregistrées dans `%APPDATA%\Distillat\quota_limits.json`.
+elles sont alors enregistrées dans un fichier propre à chaque combinaison de
+profil et de modèle, sous `%APPDATA%\Distillat\`. Chaque modèle utilisé avec
+un même profil a ainsi ses propres compteurs et limites, sans jamais mélanger
+leur consommation.
 
 Avec seulement 20 requêtes par jour, le quota quotidien est le facteur le
 plus limitant : chaque livre consomme au minimum 1 requête (génération),
@@ -287,18 +295,21 @@ lors d'une mise à jour) :
 
 - **Clé API** : Gestionnaire d'identification Windows (voir
   [Sécurité de la clé API](#sécurité-de-la-clé-api)).
-- **`.quota_state_<hash>.json`** et **`quota_limits_<hash>.json`** (compteur
-  de requêtes du jour, et limites RPM/TPM/RPD personnalisées si modifiées via
-  le bouton **Limites de quota**, un fichier de chaque par clé API pour ne
-  jamais mélanger deux comptes), **`settings.json`** (regroupe la langue de
-  l'interface choisie, voir
+- **`.quota_state_<hash>_<modèle>.json`** et **`quota_limits_<hash>_<modèle>.json`**
+  (compteur de requêtes du jour, et limites RPM/TPM/RPD personnalisées si
+  modifiées via le bouton **Limites de quota**, un fichier de chaque par
+  combinaison de clé API et de modèle pour ne jamais mélanger deux comptes,
+  ni deux modèles utilisés avec une même clé), **`settings.json`** (regroupe
+  la langue de l'interface choisie, voir
   [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches) ;
-  la liste des profils de clé API ; les prompts personnalisés par profil puis
-  par langue, si modifiés via le bouton **Prompts** ; et les derniers dossiers
-  utilisés pour une fiche et pour un export PDF, voir
+  la liste des profils de clé API, avec le modèle Gemini choisi pour chacun ;
+  les prompts personnalisés par profil puis par langue, si modifiés via le
+  bouton **Prompts** ; et les derniers dossiers utilisés pour une fiche et
+  pour un export PDF, voir
   ci-dessous), **`.generation_resume_<hash>.json`** (un fichier par livre,
   lots de chapitres déjà résumés pour une génération interrompue par un
-  échec ; absent en l'absence d'échec, supprimé dès que la génération de ce
+  échec, avec le modèle Gemini utilisé pour cette génération ; absent en
+  l'absence d'échec, supprimé dès que la génération de ce
   livre se termine avec succès) et **`debug_logs\`**
   (fichiers de diagnostic : réponses Gemini brutes sauvegardées
   automatiquement quand une réponse reste illisible même après tentative de
@@ -337,8 +348,8 @@ lors d'une mise à jour) :
   (site du projet, https://bruno-aublet.github.io/Distillat/) à droite).
 
 En développement (`python main.py`), tous ces emplacements sont identiques au
-mode compilé, y compris les fichiers techniques (`.quota_state_<hash>.json`,
-`quota_limits.json`, `settings.json`, `.generation_resume_<hash>.json`), désormais
+mode compilé, y compris les fichiers techniques (`.quota_state_<hash>_<modèle>.json`,
+`quota_limits_<hash>_<modèle>.json`, `settings.json`, `.generation_resume_<hash>.json`), désormais
 toujours dans `%APPDATA%\Distillat\` quel que soit le mode de lancement (pour
 que le suivi de quota reflète la même consommation réelle, peu importe la
 façon de lancer l'application). Le
@@ -373,7 +384,9 @@ If this sounds familiar, Distillat is for you. Simply drop your EPUB or PDF
 file into the designated area: you get a summary, character sheets, and an
 analysis of the work, ready to view or export to PDF.
 
-The application relies on Gemini 3.5 Flash's free tier.
+The application relies on Gemini's free tier (Flash), with a choice between
+several models depending on the API key profile in use (see
+[Quota tracking](#quota-tracking)).
 
 **Privacy**: the book's text is sent to the Gemini API to generate the
 report, and Google may use content submitted through the free tier to improve
@@ -383,7 +396,7 @@ its services - avoid submitting sensitive or confidential documents.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
 `.zip` file to download is at the bottom of the release page).
 
-**Version 1.3.1**
+**Version 1.3.2**
 
 Windows application with a PyQt5 interface to generate a complete reading
 report (summaries, characters, analysis) from an EPUB or PDF book, via the
@@ -499,7 +512,9 @@ instance is automatically assigned, on startup, the first profile not
 already in use by another instance open on the same computer, with no
 manual step required. Two profiles cannot share the same name or the same
 API key; a profile active in one instance cannot be edited or deleted from
-another instance, nor while a generation is running with it. Custom prompts
+another instance, nor while a generation is running with it. Each profile
+also lets you choose the Gemini model used (see
+[Quota tracking](#quota-tracking)). Custom prompts
 and custom RPM/TPM/RPD quota limits (see below) are specific to each
 profile. A dedicated button, to the right of the title at the top of the
 window, opens a new Distillat instance directly, without having to relaunch
@@ -534,7 +549,9 @@ therefore additional quota).
 
 ## Quota tracking
 
-Distillat uses the `gemini-3.5-flash` model, whose free tier is limited to:
+Each API key profile lets you choose the Gemini model used from a list
+(`gemini-3.5-flash` or `gemini-3.6-flash` as of now), via the **Profiles**
+button. The free tier of both models is currently identical:
 
 | Limit | Value |
 | --- | --- |
@@ -548,7 +565,10 @@ them via the API, they **vary from one account to another and may change
 over time**. Check your own at
 [aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit) and
 adjust them if needed via the **Quota limits** button in the application;
-they are then stored in `%APPDATA%\Distillat\quota_limits.json`.
+they are then stored in a file specific to each profile-and-model
+combination, under `%APPDATA%\Distillat\`. Each model used with a given
+profile therefore has its own counters and limits, never mixing their
+consumption.
 
 With only 20 requests per day, the daily quota is the most limiting factor:
 each book consumes at least 1 request (generation), more if the book is
@@ -628,17 +648,19 @@ update):
 
 - **API key**: Windows Credential Manager (see
   [API key security](#api-key-security)).
-- **`.quota_state_<hash>.json`** and **`quota_limits_<hash>.json`** (today's
-  request counter, and custom RPM/TPM/RPD limits if changed via the
-  **Quota limits** button, one file of each per API key so two accounts are
-  never mixed), **`settings.json`** (groups together the chosen interface
+- **`.quota_state_<hash>_<model>.json`** and **`quota_limits_<hash>_<model>.json`**
+  (today's request counter, and custom RPM/TPM/RPD limits if changed via the
+  **Quota limits** button, one file of each per API key and model combination
+  so two accounts, or two models used with the same key, are never mixed),
+  **`settings.json`** (groups together the chosen interface
   language, see
   [Interface and report language](#interface-and-report-language); the list
-  of API key profiles; custom prompts per profile then per language, if
-  changed via the **Prompts** button; and the last
-  folders used for a report and for a PDF export, see below),
+  of API key profiles, with the Gemini model chosen for each; custom prompts
+  per profile then per language, if changed via the **Prompts** button; and
+  the last folders used for a report and for a PDF export, see below),
   **`.generation_resume_<hash>.json`** (one file per book, chapter batches
-  already summarized for a generation interrupted by a failure; absent if
+  already summarized for a generation interrupted by a failure, along with
+  the Gemini model used for that generation; absent if
   there was no failure, removed as soon as that book's generation finishes
   successfully) and
   **`debug_logs\`** (diagnostic files: raw Gemini responses saved
@@ -675,8 +697,8 @@ update):
   https://bruno-aublet.github.io/Distillat/) links on the right).
 
 In development (`python main.py`), all these locations are identical to the
-compiled mode, including the technical files (`.quota_state_<hash>.json`,
-`quota_limits.json`, `settings.json`, `.generation_resume_<hash>.json`), now always
+compiled mode, including the technical files (`.quota_state_<hash>_<model>.json`,
+`quota_limits_<hash>_<model>.json`, `settings.json`, `.generation_resume_<hash>.json`), now always
 in `%APPDATA%\Distillat\` regardless of the launch mode (so that quota
 tracking reflects the same actual consumption, no matter how the application
 is launched). The `Fiches/` folder at the project root only hosts the
