@@ -11,6 +11,7 @@ import winsound
 from pathlib import Path
 
 from PyQt5.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt, QTimer
+from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 from PyQt5.QtGui import (
     QColor,
     QDragEnterEvent,
@@ -1279,6 +1280,15 @@ class MainWindow(QMainWindow):
         # être comptée par le bouton "nouvelle instance" pour respecter
         # instance_lock.MAX_INSTANCES.
         instance_lock.register_instance()
+        # Canal d'écoute propre à cette instance (voir
+        # _setup_new_instance_channel()), pour recevoir les annonces "nouveau
+        # lancement en cours"/"nouvelle instance prête" du mécanisme de
+        # désactivation du bouton "nouvelle instance" (voir
+        # _broadcast_new_instance_starting()) : ouvert avant
+        # _announce_ready_to_all_instances() ci-dessous, sans quoi cette
+        # instance ne pourrait jamais recevoir sa propre réactivation ni
+        # celle déclenchée par une future instance.
+        self._setup_new_instance_channel()
         # Attribue automatiquement à cette instance le premier profil de clé
         # API non verrouillé par une autre instance en cours d'exécution (voir
         # app.instance_lock), pour permettre de lancer plusieurs instances de
@@ -1330,6 +1340,13 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._update_quota_display(self.quota_tracker.snapshot())
         check_for_updates_on_startup(self)
+        # Le bouton "nouvelle instance" démarre désactivé (voir _build_ui()),
+        # le temps que cette instance ait fini de s'initialiser : cet appel,
+        # tout en fin de __init__(), annonce à toutes les fenêtres vivantes
+        # (y compris celle qui a éventuellement servi de lanceur) que cette
+        # instance est prête, ce qui réactive leur bouton respectif (voir
+        # _announce_ready_to_all_instances() et _on_instance_message()).
+        self._announce_ready_to_all_instances()
 
     def _size_to_available_screen(self) -> None:
         target_width, target_height = 820, 950
@@ -1344,10 +1361,24 @@ class MainWindow(QMainWindow):
         height = min(target_height, available.height())
         self.resize(width, height)
         vertical_margin = max(0, (available.height() - height) // 2 - 40)
-        self.move(
-            available.x() + (available.width() - width) // 2,
-            available.y() + vertical_margin,
-        )
+        base_x = available.x() + (available.width() - width) // 2
+        base_y = available.y() + vertical_margin
+        # Décalage en cascade selon le nombre d'instances déjà vivantes (voir
+        # instance_lock.count_alive_instances(), appelé ici avant
+        # instance_lock.register_instance() ci-dessous : il ne compte donc pas
+        # encore l'instance en cours de construction, ce qui donne directement
+        # son rang parmi les instances déjà ouvertes). Sans ce décalage, une
+        # nouvelle instance apparaissait exactement à la même place que la
+        # précédente et la masquait totalement (bug signalé le 2026-07-30).
+        # La position est bornée pour rester dans l'écran disponible plutôt
+        # que de dériver hors champ quand plusieurs instances s'accumulent.
+        cascade_step = 40
+        offset = instance_lock.count_alive_instances() * cascade_step
+        max_x_offset = max(0, available.width() - width)
+        max_y_offset = max(0, available.height() - height)
+        x = base_x + min(offset, max_x_offset)
+        y = base_y + min(offset, max_y_offset)
+        self.move(x, y)
 
     def _on_language_changed(self, index: int) -> None:
         language = self.language_selector.itemData(index)
@@ -1426,6 +1457,13 @@ class MainWindow(QMainWindow):
         header.addWidget(self.title_label)
         self.new_instance_button = QPushButton(tr("main_window.new_instance_button"))
         self.new_instance_button.clicked.connect(self._on_new_instance_clicked)
+        # Désactivé jusqu'à ce que cette instance ait fini de s'initialiser
+        # (voir MainWindow.__init__(), _announce_ready_to_all_instances()
+        # appelée en toute fin de constructeur) : sans ça, un clic donné dans
+        # la fenêtre qui vient tout juste de s'ouvrir, avant même que son
+        # canal d'écoute existe, ne serait jamais pris en compte par les
+        # autres fenêtres.
+        self.new_instance_button.setEnabled(False)
         header.addWidget(self.new_instance_button)
         header.addStretch()
         self.language_label = QLabel(tr("language_selector.label"))
@@ -1877,7 +1915,22 @@ class MainWindow(QMainWindow):
         (instance_lock.MAX_INSTANCES) : contrairement à la disponibilité de
         profil, ce n'est pas une ressource par compte Google mais un simple
         plafond d'ergonomie, qu'il vaut mieux vérifier avant de lancer un
-        processus inutile plutôt qu'après."""
+        processus inutile plutôt qu'après.
+
+        Ce bouton est désactivé PARTOUT (toutes les fenêtres ouvertes, pas
+        seulement celle-ci) dès l'appel de cette méthode, via
+        _broadcast_new_instance_starting(), et ne se réactive que sur
+        réception explicite du message "ready" (voir
+        _on_instance_message()), envoyé par la nouvelle fenêtre une
+        fois qu'elle a réellement fini de démarrer. Remplace une première
+        tentative par fichier de verrou partagé entre process (2026-07-30),
+        qui s'est révélée sujette à des conditions de course non résolues
+        (verrous orphelins mal détectés à cause de processus "lanceurs"
+        python.exe d'un venv qui se terminent avant le vrai enfant, entre
+        autres) : ce nouveau mécanisme n'utilise plus aucun fichier partagé
+        entre process, seulement des canaux QLocalServer/QLocalSocket
+        annoncés explicitement (voir MainWindow._setup_new_instance_channel()
+        et instance_lock.local_server_name_for_pid())."""
         if instance_lock.count_alive_instances() >= instance_lock.MAX_INSTANCES:
             QMessageBox.warning(
                 self,
@@ -1885,6 +1938,7 @@ class MainWindow(QMainWindow):
                 tr("main_window.max_instances_message", max_instances=instance_lock.MAX_INSTANCES),
             )
             return
+        self._broadcast_new_instance_starting()
         # En mode compilé, sys.executable pointe déjà sur Distillat.exe ; en
         # développement, il pointe sur l'interpréteur Python du venv, à qui
         # il faut alors passer le chemin de main.py en argument (résolu via
@@ -1896,11 +1950,111 @@ class MainWindow(QMainWindow):
         try:
             subprocess.Popen(args)
         except OSError as exc:
+            # Le lancement a échoué : aucune nouvelle instance ne viendra
+            # jamais annoncer qu'elle est prête, il faut donc réactiver le
+            # bouton nous-mêmes plutôt que d'attendre indéfiniment.
+            self.new_instance_button.setEnabled(True)
             QMessageBox.critical(
                 self,
                 tr("main_window.new_instance_error_title"),
                 tr("main_window.new_instance_error_message", error=exc),
             )
+
+    def _setup_new_instance_channel(self) -> None:
+        """Ouvre le canal d'écoute propre à cette fenêtre (QLocalServer, nom
+        basé sur son PID via instance_lock.local_server_name_for_pid()), à
+        appeler une fois au démarrage de MainWindow. Reçoit deux types de
+        messages textuels (voir _on_new_instance_connection()) : "starting"
+        (un lancement d'instance vient de démarrer quelque part, désactiver
+        le bouton) et "ready" (la nouvelle instance a fini de démarrer,
+        réactiver le bouton). Le contenu du message est indispensable : une
+        première version ne transmettait aucune donnée et traitait toute
+        connexion entrante comme "ready", si bien que la diffusion de
+        "starting" aux autres fenêtres... réactivait leur bouton au lieu de
+        le désactiver (bug "le blocage n'est pas global" du 2026-07-30).
+        Une éventuelle instance fantôme du même nom (crash antérieur ayant
+        laissé le canal mal fermé) est nettoyée via removeServer() avant
+        d'écouter, comme le recommande la documentation Qt de
+        QLocalServer.listen()."""
+        server_name = instance_lock.local_server_name_for_pid(os.getpid())
+        QLocalServer.removeServer(server_name)
+        self._new_instance_server = QLocalServer(self)
+        self._new_instance_server.newConnection.connect(self._on_new_instance_connection)
+        self._new_instance_server.listen(server_name)
+
+    def _on_new_instance_connection(self) -> None:
+        """Accepte une connexion entrante sur le canal de cette fenêtre (voir
+        _setup_new_instance_channel()) et attend son message : le contenu
+        n'arrive qu'après l'établissement de la connexion (readyRead), il ne
+        faut donc pas le lire ici même."""
+        socket = self._new_instance_server.nextPendingConnection()
+        if socket is None:
+            return
+        socket.readyRead.connect(lambda s=socket: self._on_instance_message(s))
+        socket.disconnected.connect(socket.deleteLater)
+
+    def _on_instance_message(self, socket: QLocalSocket) -> None:
+        """Traite un message reçu d'une autre instance (ou de la toute
+        nouvelle instance en train de finir son démarrage) : "starting"
+        désactive le bouton "nouvelle instance" de cette fenêtre, "ready" le
+        réactive. Les messages tiennent sur quelques octets : ils arrivent
+        toujours en un seul bloc, pas besoin d'accumulation entre plusieurs
+        readyRead. Un contenu inattendu est ignoré sans effet, pour qu'un
+        éventuel process tiers qui se connecterait par erreur au canal ne
+        puisse pas dérégler l'état du bouton."""
+        message = bytes(socket.readAll()).decode("utf-8", errors="replace").strip()
+        if message == "starting":
+            self.new_instance_button.setEnabled(False)
+        elif message == "ready":
+            self.new_instance_button.setEnabled(True)
+
+    def _send_instance_message(self, pid: int, message: str) -> None:
+        """Envoie un message ("starting" ou "ready") au canal de l'instance
+        de ce PID. connectToServer() est asynchrone : l'écriture ne peut se
+        faire qu'une fois la connexion réellement établie (signal connected),
+        jamais immédiatement après l'appel. Une instance injoignable
+        (fermée entre-temps, canal pas encore ouvert) est ignorée
+        silencieusement via errorOccurred : son bouton n'existe déjà plus, ou
+        sera mis à jour par un message ultérieur."""
+        socket = QLocalSocket(self)
+
+        def send_and_close(s=socket, m=message):
+            s.write(m.encode("utf-8"))
+            s.flush()
+            s.disconnectFromServer()
+
+        socket.connected.connect(send_and_close)
+        socket.disconnected.connect(socket.deleteLater)
+        socket.errorOccurred.connect(lambda _error, s=socket: s.deleteLater())
+        socket.connectToServer(instance_lock.local_server_name_for_pid(pid))
+
+    def _broadcast_new_instance_starting(self) -> None:
+        """Désactive le bouton "nouvelle instance" de cette fenêtre
+        immédiatement, puis envoie "starting" à chaque autre fenêtre vivante
+        (canaux listés via instance_lock.list_alive_instance_pids()) pour
+        qu'elle désactive aussi son propre bouton - le nouveau process, une
+        fois prêt (fin de son MainWindow.__init__()), diffusera à son tour
+        "ready" via _announce_ready_to_all_instances(), qui réactivera le
+        bouton partout."""
+        self.new_instance_button.setEnabled(False)
+        for pid in instance_lock.list_alive_instance_pids():
+            if pid == os.getpid():
+                continue
+            self._send_instance_message(pid, "starting")
+
+    def _announce_ready_to_all_instances(self) -> None:
+        """Diffuse "ready" à toutes les fenêtres vivantes, pour qu'elles
+        réactivent toutes leur bouton "nouvelle instance" désactivé par
+        _broadcast_new_instance_starting(). Appelée une fois à la fin de
+        MainWindow.__init__(), après _setup_new_instance_channel() et
+        instance_lock.register_instance(). Le bouton de cette fenêtre-ci,
+        désactivé par défaut à sa construction (voir _build_ui()), est
+        activé directement plutôt que via un message à soi-même."""
+        self.new_instance_button.setEnabled(True)
+        for pid in instance_lock.list_alive_instance_pids():
+            if pid == os.getpid():
+                continue
+            self._send_instance_message(pid, "ready")
 
     def _on_edit_api_key(self) -> None:
         self._prompt_for_api_key()
@@ -2205,6 +2359,7 @@ class MainWindow(QMainWindow):
             if self.active_profile is not None:
                 instance_lock.release_profile_lock(self.active_profile["id"])
             instance_lock.unregister_instance()
+            self._new_instance_server.close()
             event.accept()
         else:
             event.ignore()

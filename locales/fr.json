@@ -37,7 +37,8 @@
     "unreadable_response": "Réponse de Gemini illisible (format inattendu) : {error}",
     "truncated_response": "Réponse de Gemini interrompue en cours de génération car trop longue (limite de longueur du modèle atteinte) : le contenu reçu est incomplet et inexploitable.",
     "unexpected_response_shape": "La réponse de Gemini n'a pas la forme attendue (racine JSON non exploitable).",
-    "no_usable_summary": "La réponse de Gemini ne contient pas de résumé exploitable."
+    "no_usable_summary": "La réponse de Gemini ne contient pas de résumé exploitable.",
+    "incomplete_first_json_object": "Gemini a produit une réponse incomplète (personnages et/ou analyse manquants) suivie d'une seconde tentative plus complète dans la même réponse : pour éviter une fiche incomplète, cette génération est annulée. Recliquez sur Résumer pour réessayer."
   },
   "gemini_progress": {
     "counting_tokens": "Comptage des tokens du texte extrait…",

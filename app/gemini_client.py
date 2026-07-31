@@ -20,9 +20,10 @@ from app.prompts_store import load_custom_prompts
 from app.quota_tracker import QuotaSnapshot, QuotaTracker
 
 # gemini-2.5-flash a été retiré pour les nouvelles clés API en juillet 2026,
-# avant sa date de dépréciation officielle annoncée. gemini-3.5-flash est le
-# modèle Flash generally available (non-preview) qui lui succède.
-MODEL_NAME = "gemini-3.5-flash"
+# avant sa date de dépréciation officielle annoncée. gemini-3.5-flash a été le
+# modèle Flash generally available (non-preview) qui lui a succédé, avant
+# gemini-3.6-flash.
+MODEL_NAME = "gemini-3.6-flash"
 
 
 @dataclass(frozen=True)
@@ -524,7 +525,14 @@ l'intrigue ou du propos, du début à la fin.
 les événements clés, les rebondissements, les dialogues ou moments marquants, et l'évolution \
 des personnages. Ne te contente pas d'une liste télégraphique de faits : développe chaque \
 section avec plusieurs phrases fluides et concrètes, comme le ferait un lecteur racontant le \
-livre en détail à un ami. Chaque titre de section doit être seul sur sa ligne et commencer \
+livre en détail à un ami. Si ce livre fait partie d'une série et que son tout début rappelle \
+explicitement des événements déjà racontés dans un tome précédent (un préambule ou prologue \
+récapitulatif clairement présenté comme un rappel du passé, pas l'histoire de ce livre-ci), \
+mentionne ce rappel en une ou deux phrases seulement, sans le développer, puis consacre \
+l'essentiel du résumé détaillé à l'intrigue propre à CE livre : ne confonds jamais un tel rappel \
+avec le début effectif de l'histoire de ce tome (scène d'ouverture, prologue ou flashback qui \
+fait partie intégrante de son intrigue), qui doit au contraire être détaillé normalement comme \
+n'importe quelle autre section. Chaque titre de section doit être seul sur sa ligne et commencer \
 par "## " (par exemple "## Partie 1 : ..."), ou "### " pour un sous-titre ; n'utilise aucune \
 autre mise en forme Markdown dans le texte.
 3. La liste des PERSONNAGES ET ENTITÉS PRINCIPAUX : les personnages individuels qui apparaissent \
@@ -545,7 +553,10 @@ de l'œuvre - développée et argumentée, sans répéter le contenu déjà couv
 Réponds STRICTEMENT avec un objet JSON valide, sans aucun texte avant ou après, ni fences \
 markdown, au format exact. Les quatre champs ci-dessous sont tous obligatoires : ne renvoie \
 jamais "characters" vide ou "analysis" vide, quel que soit le nombre de mots déjà produits pour \
-les champs précédents :
+les champs précédents. Ne produis QU'UN SEUL objet JSON en tout et pour tout : si tu réalises \
+après coup qu'un champ de l'objet déjà commencé est insuffisant, corrige-le à l'intérieur de ce \
+même objet avant de le refermer - ne referme jamais cet objet pour en recommencer un second, même \
+plus complet, à la suite :
 {{
   "summary": "Le résumé court ici, en français...",
   "detailed_summary": "Le résumé détaillé et développé ici, en français...",
@@ -559,7 +570,7 @@ Texte du livre :
 ---
 
 Réponds uniquement avec l'objet JSON, avec les quatre champs "summary", "detailed_summary", \
-"characters" et "analysis" tous renseignés."""
+"characters" et "analysis" tous renseignés, dans un seul et unique objet JSON."""
 
 
 DEFAULT_CHAPTER_SUMMARY_PROMPT = """Tu résumes des chapitres du livre "{book_title}" de {author}.
@@ -609,7 +620,14 @@ l'intrigue du début à la fin.
 long à l'intrigue riche), qui fusionne et reformule les résumés de chapitre ci-dessus en un texte \
 cohérent et fluide (pas une simple concaténation), en conservant les événements clés, les \
 rebondissements et l'évolution des personnages de chaque partie, en évitant les répétitions et \
-en assurant une continuité narrative claire entre les parties. Chaque titre de section doit \
+en assurant une continuité narrative claire entre les parties. Si le résumé du tout premier \
+chapitre rappelle explicitement des événements déjà racontés dans un tome précédent de la série \
+(un préambule ou prologue récapitulatif clairement présenté comme un rappel du passé, pas \
+l'histoire de ce livre-ci), mentionne ce rappel en une ou deux phrases seulement, sans le \
+développer, puis consacre l'essentiel du résumé détaillé à l'intrigue propre à CE livre : ne \
+confonds jamais un tel rappel avec le début effectif de l'histoire de ce tome (scène d'ouverture, \
+prologue ou flashback qui fait partie intégrante de son intrigue), qui doit au contraire être \
+détaillé normalement comme n'importe quelle autre partie. Chaque titre de section doit \
 être seul sur sa ligne et commencer par "## " (par exemple "## Partie 1 : ..."), ou "### " \
 pour un sous-titre ; n'utilise aucune autre mise en forme Markdown dans le texte.
 3. La liste des PERSONNAGES ET ENTITÉS PRINCIPAUX : les personnages individuels qui apparaissent \
@@ -658,8 +676,14 @@ or subject, from beginning to end.
 (one section per part or group of chapters where relevant) and covers, for each section: the key \
 events, the twists, the memorable dialogue or moments, and the characters' development. Do not \
 settle for a telegraphic list of facts: develop each section with several fluid, concrete sentences, \
-as a reader would when recounting the book in detail to a friend. Each section heading must stand \
-alone on its own line and start with "## " (for example "## Part 1: ..."), or "### " for a \
+as a reader would when recounting the book in detail to a friend. If this book is part of a series \
+and its very beginning explicitly recaps events already told in a previous installment (a preamble \
+or prologue clearly presented as a recap of the past, not this book's own story), mention that \
+recap in one or two sentences only, without developing it, then devote the bulk of the detailed \
+summary to the plot specific to THIS book: never confuse such a recap with the actual start of \
+this installment's own story (an opening scene, prologue, or flashback that is an integral part of \
+its plot), which must instead be detailed normally like any other section. Each section heading \
+must stand alone on its own line and start with "## " (for example "## Part 1: ..."), or "### " for a \
 subheading; do not use any other Markdown formatting in the text.
 3. The list of MAIN CHARACTERS AND ENTITIES: individual characters who appear across multiple \
 chapters or scenes AND have a direct impact on the plot (through their decisions, actions, or \
@@ -678,7 +702,9 @@ covering the main themes, the writing style and narrative construction, then the
 Respond STRICTLY with a valid JSON object, with no text whatsoever before or after, no markdown \
 fences, in the exact format. All four fields below are mandatory: never return an empty \
 "characters" or an empty "analysis", no matter how many words you have already produced for the \
-preceding fields:
+preceding fields. Produce EXACTLY ONE JSON object in total: if you realize afterwards that a field \
+in the object you already started is insufficient, fix it inside that same object before closing \
+it - never close this object to start a second one, even a more complete one, afterwards:
 {{
   "summary": "The short summary here, in English...",
   "detailed_summary": "The detailed, developed summary here, in English...",
@@ -692,7 +718,7 @@ Book text:
 ---
 
 Respond only with the JSON object, with all four fields "summary", "detailed_summary", \
-"characters" and "analysis" filled in."""
+"characters" and "analysis" filled in, in a single JSON object."""
 
 
 DEFAULT_CHAPTER_SUMMARY_PROMPT_EN = """You are summarizing chapters of the book "{book_title}" by {author}.
@@ -741,7 +767,13 @@ from beginning to end.
 novel with a rich plot), that merges and rephrases the chapter summaries above into a coherent, \
 fluid text (not a mere concatenation), preserving the key events, the twists, and the characters' \
 development from each part, avoiding repetition, and ensuring clear narrative continuity between \
-parts. Each section heading must stand alone on its own line and start with "## " (for example \
+parts. If the very first chapter's summary explicitly recaps events already told in a previous \
+installment of the series (a preamble or prologue clearly presented as a recap of the past, not \
+this book's own story), mention that recap in one or two sentences only, without developing it, \
+then devote the bulk of the detailed summary to the plot specific to THIS book: never confuse such \
+a recap with the actual start of this installment's own story (an opening scene, prologue, or \
+flashback that is an integral part of its plot), which must instead be detailed normally like any \
+other part. Each section heading must stand alone on its own line and start with "## " (for example \
 "## Part 1: ..."), or "### " for a subheading; do not use any other Markdown formatting in the text.
 3. The list of MAIN CHARACTERS AND ENTITIES: individual characters who appear across multiple \
 chapters or scenes AND have a direct impact on the plot (through their decisions, actions, or \
@@ -1035,7 +1067,7 @@ def _try_repair_internal_stutter(lines: list[str]) -> tuple[dict, str] | None:
 UNPARSABLE_LOGS_MAX_FILES = 5
 
 
-def _log_unparsable_response(raw_text: str, context_label: str, error: json.JSONDecodeError) -> None:
+def _log_unparsable_response(raw_text: str, context_label: str, error: Exception) -> None:
     """Sauvegarde la réponse Gemini brute qui a fait échouer tout parsing (y
     compris la tentative de réparation du bégaiement), pour diagnostic après
     coup : sans ça, la réponse exacte qui a fait échouer une génération était
@@ -1072,7 +1104,7 @@ def _log_unparsable_response(raw_text: str, context_label: str, error: json.JSON
 
 def _parse_json_object(
     raw_text: str, context_label: str = "unknown", finish_reason: str | None = None
-) -> tuple[dict, str]:
+) -> tuple[dict, str, str, int]:
     """Parse le premier objet JSON de la réponse. Même en mode JSON natif de
     l'API, Gemini produit parfois du contenu superflu après un premier objet
     par ailleurs valide (ex : un second objet accolé) ; json.loads() rejette
@@ -1106,13 +1138,18 @@ def _parse_json_object(
     except json.JSONDecodeError as exc:
         repaired = _try_repair_stuttered_json(text)
         if repaired is not None:
-            return repaired
+            # Le bégaiement réparé ici casse la syntaxe de l'objet lui-même
+            # (contrairement au cas "second objet complet" ci-dessous) : le
+            # suffixe retiré n'est jamais un objet JSON reconstituable, donc
+            # end_index n'a pas de sens à recalculer pour ce chemin.
+            repaired_obj, repaired_suffix = repaired
+            return repaired_obj, repaired_suffix, text, len(text) - len(repaired_suffix)
         _log_unparsable_response(raw_text, context_label, exc)
         if finish_reason == "MAX_TOKENS":
             raise GeminiError(tr("gemini_errors.truncated_response")) from exc
         raise GeminiError(tr("gemini_errors.unreadable_response", error=exc)) from exc
     leftover = text[end_index:].strip()
-    return obj, leftover
+    return obj, leftover, text, end_index
 
 
 def _normalize_dashes(text: str) -> str:
@@ -1136,6 +1173,45 @@ def _parse_characters_list(data: list) -> list[Character]:
     return characters
 
 
+def _leftover_has_richer_fields(
+    stripped_text: str, end_index: int, leftover: str, characters: list[Character], analysis: str
+) -> bool:
+    """Détecte le cas où Gemini a refermé prématurément l'objet JSON en cours
+    (characters et/ou analysis encore vides à ce stade) puis continué à
+    écrire du JSON à la suite comme si l'objet était toujours ouvert, plutôt
+    que de reprendre proprement à zéro (repéré le 2026-07-30 sur "La
+    Compagnie De La Foudre" : la réponse se terminait par
+    `..."detailed_summary": "..."}` suivi directement, sans nouvelle accolade
+    ouvrante, de `,"characters": [...], "analysis": "..."}` - donc PAS un
+    second objet JSON autonome, mais la suite interrompue du même objet,
+    reconnaissable au leftover qui commence par une virgule). raw_decode()
+    n'y voit qu'un premier objet syntaxiquement valide (mais fonctionnellement
+    incomplet) suivi de contenu superflu, sans savoir que ce "superflu" est en
+    réalité la fin légitime de l'objet. Ne tente aucune récupération
+    automatique du contenu (risque de mélanger un objet reconstitué de façon
+    incertaine) : sert uniquement à distinguer ce cas précis d'un vrai
+    leftover sans intérêt (bégaiement résiduel, texte redondant), pour lever
+    une erreur explicite plutôt que renvoyer silencieusement une fiche
+    incomplète."""
+    if characters and analysis:
+        return False
+    if not leftover.startswith(","):
+        return False
+    # Reconstitue l'objet tel que Gemini semble avoir voulu l'écrire : le
+    # texte du premier objet sans son accolade fermante, prolongé par la
+    # suite interrompue (qui commence par la virgule du champ suivant).
+    reconstructed = stripped_text[: end_index - 1].rstrip() + leftover
+    try:
+        extra, _ = json.JSONDecoder().raw_decode(reconstructed)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(extra, dict):
+        return False
+    extra_has_characters = bool(_parse_characters_list(extra.get("characters", [])))
+    extra_has_analysis = bool(str(extra.get("analysis", "")).strip())
+    return (not characters and extra_has_characters) or (not analysis and extra_has_analysis)
+
+
 def _parse_full_report_json(
     raw_text: str, context_label: str = "full_report", finish_reason: str | None = None
 ) -> tuple[str, str, list[Character], str, str]:
@@ -1145,7 +1221,7 @@ def _parse_full_report_json(
     d'échec, l'appel "rapport complet" (livre tenant en une requête) de
     l'appel "consolidation" (dernière requête d'un livre découpé en lots) :
     même fonction de parsing, deux contextes d'appel différents."""
-    data, leftover = _parse_json_object(raw_text, context_label, finish_reason)
+    data, leftover, stripped_text, end_index = _parse_json_object(raw_text, context_label, finish_reason)
     if not isinstance(data, dict):
         # Le mode JSON natif de Gemini garantit une syntaxe JSON valide, mais
         # pas que la racine soit un objet conforme au schéma demandé (ex : une
@@ -1161,6 +1237,10 @@ def _parse_full_report_json(
     if not summary:
         raise GeminiError(tr("gemini_errors.no_usable_summary"))
 
+    if leftover and _leftover_has_richer_fields(stripped_text, end_index, leftover, characters, analysis):
+        _log_unparsable_response(raw_text, context_label, ValueError("objet JSON refermé prématurément puis prolongé dans le leftover"))
+        raise GeminiError(tr("gemini_errors.incomplete_first_json_object"))
+
     return summary, detailed_summary, characters, analysis, leftover
 
 
@@ -1173,7 +1253,7 @@ def _parse_chapter_summaries_batch_json(
     différer de l'original) : le nombre d'entrées attendu est connu à
     l'avance, contrairement au cas des personnages où Gemini choisit lui-même
     combien d'entrées produire."""
-    data, leftover = _parse_json_object(raw_text, "chapter_summary_batch", finish_reason)
+    data, leftover, _stripped_text, _end_index = _parse_json_object(raw_text, "chapter_summary_batch", finish_reason)
     raw_summaries = data.get("chapter_summaries", [])
 
     summaries: list[tuple[str, str]] = []

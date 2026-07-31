@@ -25,7 +25,7 @@ confidentiels.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.3.2**
+**Version 1.3.3**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
@@ -47,9 +47,11 @@ vers la page de téléchargement.
 
 ## Fiche d'exemple
 
-Le dossier `Fiches/` contient un fichier nommé
-`FICHE TEST - Les Terres Oubliées - LIVRE FICTIF.distillat.json`, à ouvrir via
-**Charger une fiche…** (ou en le glissant-déposant dans l'application) pour
+Deux fiches d'exemple, `FICHE TEST - Les Terres Oubliées - LIVRE FICTIF.distillat.json`
+et sa version anglaise `TEST SHEET - The Forgotten Lands - FICTITIOUS BOOK
+(EN).distillat.json`, sont copiées automatiquement au premier démarrage dans
+le dossier normal des fiches (`Documents\Distillat\Fiches`) : ouvrez-les via
+**Charger une fiche…** (ou en les glissant-déposant dans l'application) pour
 voir à quoi ressemble un résultat complet (couverture, résumé court, résumé
 détaillé, personnages, analyse) sans avoir à traiter un vrai livre ni à
 consommer de quota Gemini.
@@ -161,7 +163,11 @@ et les limites de quota RPM/TPM/RPD personnalisées (voir plus bas) sont
 propres à chaque profil. Un bouton dédié, à droite du titre en haut de la
 fenêtre, permet d'ouvrir directement une nouvelle instance de Distillat sans
 avoir à relancer l'exécutable ou le script manuellement (4 instances
-simultanées maximum sur le même ordinateur).
+simultanées maximum sur le même ordinateur) ; chaque nouvelle fenêtre s'ouvre
+légèrement décalée par rapport aux précédentes pour rester visible à côté
+d'elles, et ce bouton se désactive dans toutes les fenêtres ouvertes le temps
+qu'un lancement en cours se termine, pour ne jamais dépasser cette limite en
+cliquant plusieurs fois rapidement.
 
 Le bouton **Prompts** ouvre une fenêtre permettant de consulter et, si
 souhaité, de modifier les prompts envoyés à Gemini (un par cas de figure
@@ -396,7 +402,7 @@ its services - avoid submitting sensitive or confidential documents.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
 `.zip` file to download is at the bottom of the release page).
 
-**Version 1.3.2**
+**Version 1.3.3**
 
 Windows application with a PyQt5 interface to generate a complete reading
 report (summaries, characters, analysis) from an EPUB or PDF book, via the
@@ -418,9 +424,11 @@ link to the download page.
 
 ## Sample report
 
-The `Fiches/` folder contains a file named
-`FICHE TEST - Les Terres Oubliées - LIVRE FICTIF.distillat.json`, to open via
-**Load a report…** (or by dragging and dropping it into the application) to
+Two sample reports, `FICHE TEST - Les Terres Oubliées - LIVRE FICTIF.distillat.json`
+and its English version `TEST SHEET - The Forgotten Lands - FICTITIOUS BOOK
+(EN).distillat.json`, are automatically copied on first launch into the
+normal reports folder (`Documents\Distillat\Fiches`): open them via
+**Load a report…** (or by dragging and dropping them into the application) to
 see what a complete result looks like (cover, short summary, detailed
 summary, characters, analysis) without having to process a real book or
 consume any Gemini quota.

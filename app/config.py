@@ -84,6 +84,27 @@ def get_reports_dir() -> Path:
     return reports_dir
 
 
+def copy_sample_reports() -> None:
+    """Copie dans le dossier normal des fiches (get_reports_dir()) les fiches
+    d'exemple fournies avec l'application (dossier Fiches/ du projet en
+    développement, embarqué sous get_resource_dir()/Fiches en mode compilé,
+    voir distillat.spec). Ne copie que les fichiers .distillat.json (jamais
+    Couverture.png, image de travail non destinée à être distribuée) et
+    n'écrase jamais un fichier déjà présent à la destination, pour ne
+    jamais perdre une modification que l'utilisateur y aurait faite."""
+    source_dir = get_resource_dir() / "Fiches"
+    if not source_dir.is_dir():
+        return
+    destination_dir = get_reports_dir()
+    for item in source_dir.glob("*.distillat.json"):
+        target = destination_dir / item.name
+        if not target.exists():
+            try:
+                shutil.copyfile(item, target)
+            except OSError:
+                pass
+
+
 def get_debug_logs_dir() -> Path:
     """Sous-dossier de `get_settings_dir()` où sont journalisées les réponses
     Gemini brutes en cas d'échec de parsing JSON (voir

@@ -37,7 +37,8 @@
     "unreadable_response": "Unreadable response from Gemini (unexpected format): {error}",
     "truncated_response": "Gemini's response was cut off mid-generation because it was too long (the model's length limit was reached): the content received is incomplete and unusable.",
     "unexpected_response_shape": "The Gemini response does not have the expected shape (unusable JSON root).",
-    "no_usable_summary": "The Gemini response does not contain a usable summary."
+    "no_usable_summary": "The Gemini response does not contain a usable summary.",
+    "incomplete_first_json_object": "Gemini produced an incomplete response (missing characters and/or analysis) followed by a more complete second attempt within the same response: to avoid an incomplete report, this generation has been cancelled. Click Summarize again to retry."
   },
   "gemini_progress": {
     "counting_tokens": "Counting tokens of the extracted text…",

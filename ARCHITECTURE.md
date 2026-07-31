@@ -21,7 +21,9 @@ sauvegarde JSON et/ou export PDF.
 ## Point d'entrée et flux général
 
 - **`main.py`** : point d'entrée. Migre les anciens fichiers de données
-  (`config.migrate_legacy_files()`), initialise la langue de l'UI
+  (`config.migrate_legacy_files()`), copie les fiches d'exemple dans le
+  dossier normal des fiches (`config.copy_sample_reports()`, voir
+  `app/config.py` ci-dessous), initialise la langue de l'UI
   (`i18n.init_language()`, avant toute construction de fenêtre puisque tous
   les textes affichés en dépendent), configure l'icône, lance `MainWindow`.
 - **`app/worker.py`** (`SummarizeWorker`, `QThread`) : exécute extraction du
@@ -60,6 +62,15 @@ sauvegarde JSON et/ou export PDF.
     de génération `assets/success.wav`, `LICENSE`, `CHANGELOG.md`) - même
     logique `sys._MEIPASS` en mode gelé que pour le reste de `get_resource_dir()`,
     pour ne jamais dupliquer leur emplacement selon le mode de lancement.
+  - `copy_sample_reports()` (appelée depuis `main.py` à chaque démarrage) :
+    copie dans `get_reports_dir()` les fiches d'exemple `*.distillat.json` du
+    dossier `Fiches/` du projet, embarqué sous `get_resource_dir()/Fiches` en
+    mode compilé (`datas` de `distillat.spec`). Ne copie que les fichiers
+    `.distillat.json` (jamais `Fiches/Couverture.png`, image de travail
+    interne non destinée à être distribuée) et n'écrase jamais un fichier déjà
+    présent à destination, pour ne jamais perdre une modification que
+    l'utilisateur y aurait faite (même philosophie que `migrate_legacy_files()`
+    ci-dessus).
   - Clés API Gemini stockées chiffrées via `keyring` (Gestionnaire
     d'identification Windows), jamais en clair sur disque. Depuis l'ajout du
     support multi-instances (2026-07-22, voir `app/instance_lock.py`
@@ -267,18 +278,35 @@ sauvegarde JSON et/ou export PDF.
   juste après la construction de `quota_tracker` ; `unregister_instance()`,
   appelée dans `closeEvent()`) contient les mêmes informations de
   propriétaire que les verrous de profil (PID, date de création, machine).
-  `count_alive_instances()` parcourt tous ces fichiers, ne compte que ceux
-  dont le propriétaire est vivant (même `_owner_is_alive()` que ci-dessus,
-  donc robuste lui aussi à la réutilisation d'un PID), et supprime
-  au passage les marqueurs orphelins trouvés (instance qui a planté sans se
-  désinscrire) plutôt que de les laisser s'accumuler indéfiniment - même
-  esprit que `gemini_client._trim_api_requests_log()`. `MAX_INSTANCES = 4`
-  (plafond fixe, pas un réglage utilisateur) : vérifié par
-  `MainWindow._on_new_instance_clicked()` avant de lancer un nouveau
-  processus, avec un message si la limite est atteinte ; ce n'est pas une
-  contrainte de ressource par compte Google comme pour les profils, juste un
-  plafond d'ergonomie pour ne pas se retrouver avec un nombre de fenêtres
-  difficilement gérable à l'écran.
+  `list_alive_instance_pids()` (ajoutée le 2026-07-30) parcourt tous ces
+  fichiers, ne retient que les PID dont le propriétaire est vivant (même
+  `_owner_is_alive()` que ci-dessus, donc robuste lui aussi à la réutilisation
+  d'un PID), et supprime au passage les marqueurs orphelins trouvés (instance
+  qui a planté sans se désinscrire) plutôt que de les laisser s'accumuler
+  indéfiniment - même esprit que `gemini_client._trim_api_requests_log()`.
+  `count_alive_instances()` n'est plus qu'une façade `len(list_alive_instance_pids())` :
+  la liste des PID (pas seulement leur nombre) est nécessaire depuis le
+  2026-07-30 pour cibler les canaux `QLocalServer` de chaque instance à
+  notifier lors de l'ouverture d'une nouvelle fenêtre (voir
+  `local_server_name_for_pid()` ci-dessous et le paragraphe dédié dans
+  `MainWindow` plus bas). `MAX_INSTANCES = 4` (plafond fixe, pas un réglage
+  utilisateur) : vérifié par `MainWindow._on_new_instance_clicked()` avant de
+  lancer un nouveau processus, avec un message si la limite est atteinte ; ce
+  n'est pas une contrainte de ressource par compte Google comme pour les
+  profils, juste un plafond d'ergonomie pour ne pas se retrouver avec un
+  nombre de fenêtres difficilement gérable à l'écran.
+
+  `local_server_name_for_pid(pid)` (ajoutée le 2026-07-30) : nom déterministe
+  du canal `QLocalServer`/`QLocalSocket` d'une instance (`"Distillat_instance_<pid>"`),
+  utilisé par `MainWindow` pour que chaque fenêtre écoute son propre canal et
+  que le bouton "nouvelle instance" notifie explicitement les autres fenêtres
+  vivantes qu'un lancement démarre ou se termine (voir le paragraphe dédié
+  dans `MainWindow` plus bas) - à la place d'un fichier de verrou partagé
+  entre process, dont une première tentative s'est révélée sujette à
+  plusieurs conditions de course non résolues (verrous orphelins mal
+  détectés à cause de processus "lanceurs" `python.exe` d'un venv qui se
+  terminent avant le vrai enfant, comptage lu par plusieurs process avant
+  qu'aucun marqueur n'existe encore).
 
 - **`app/i18n.py`** : internationalisation (français/anglais). Traductions
   chargées depuis `locales/fr.json`/`locales/en.json` (clés imbriquées par
@@ -319,11 +347,23 @@ sauvegarde JSON et/ou export PDF.
   Document EPUB3.
   `_find_cover_image_bytes()` (beaucoup d'EPUB ne taguent pas proprement leur
   couverture) essaie dans l'ordre : type `ITEM_COVER`, métadonnée OPF
-  `<meta name="cover">`, nom/id d'image contenant "cover", puis en dernier
-  repli nom d'image commençant par "fc" ou contenant "front" (convention
-  "front cover"/"rear cover" rencontrée sur certains EPUB, ex. constaté le
-  2026-07-22 sur un EPUB nommant ses images `fc_750px.jpg`/`rc_750px.jpg` sans
-  aucune des 3 premières stratégies applicable). Si les 4 échouent, la fiche
+  `<meta name="cover">`, nom/id d'image contenant "cover", nom d'image
+  commençant par "fc" ou contenant "front" (convention "front cover"/"rear
+  cover" rencontrée sur certains EPUB, ex. constaté le 2026-07-22 sur un EPUB
+  nommant ses images `fc_750px.jpg`/`rc_750px.jpg` sans aucune des 3 premières
+  stratégies applicable), puis deux replis ajoutés le 2026-07-23 pour les EPUB
+  sans métadonnée ni nom de fichier exploitable : la première image trouvée
+  dans un document XHTML dont le nom/id contient "cover" (motif EPUB3 où la
+  couverture est une page XHTML dédiée, image encapsulée plutôt que déclarée
+  comme item image nu), puis en tout dernier recours la première image
+  trouvée dans le premier document du spine (hors nav), à l'instar de ce que
+  fait un lecteur EPUB classique (la couverture est presque toujours la
+  première page visuelle du livre). Ces deux derniers replis passent par
+  `_first_image_in_document()`, qui résout le `src`/`href` relatif trouvé
+  dans le HTML par rapport au dossier du document via `posixpath` (le href
+  d'une image dans le XHTML est relatif au fichier XHTML qui la référence,
+  pas à la racine de l'EPUB), puis recherche l'item correspondant via
+  `book.get_item_with_href()`. Si toutes les stratégies échouent, la fiche
   reste sans couverture automatique mais l'utilisateur peut en définir une
   manuellement depuis l'UI (voir `main_window.py` ci-dessous).
 
@@ -351,9 +391,10 @@ sauvegarde JSON et/ou export PDF.
   (`_client.models.generate_content(...)`/`count_tokens(...)`), résolu depuis
   le paramètre `model` propagé de bout en bout (voir ci-dessous), avec
   `MODEL_NAME` comme valeur par défaut.
-  - `MODEL_NAME = "gemini-3.5-flash"` reste la valeur par défaut/de
-    rétrocompatibilité, mais depuis le 2026-07-22 (choix de modèle Gemini par
-    profil, voir `app/config.py` ci-dessus) le modèle réellement utilisé est
+  - `MODEL_NAME = "gemini-3.6-flash"` (`gemini-3.5-flash` jusqu'au 2026-07-23)
+    reste la valeur par défaut/de rétrocompatibilité, mais depuis le
+    2026-07-22 (choix de modèle Gemini par profil, voir `app/config.py`
+    ci-dessus) le modèle réellement utilisé est
     choisissable par profil et propagé en paramètre explicite `model: str`
     à travers toute la chaîne d'appel (`main_window` -> `worker.SummarizeWorker`
     -> `gemini_client.generate_book_report()`/`_generate_book_report_impl()`
@@ -589,7 +630,12 @@ sauvegarde JSON et/ou export PDF.
     `json.loads()`) pour tolérer du contenu superflu après le premier objet
     JSON valide ; ce surplus est renvoyé séparément (`leftover`), jamais jeté
     silencieusement, et remonté jusqu'à `BookReport.extra_generated_text`.
-    Si `raw_decode()` échoue, `_try_repair_stuttered_json()` tente une
+    Renvoie aussi le texte complet nettoyé des fences (`stripped_text`) et la
+    position de fin du premier objet (`end_index`), utilisés par
+    `_leftover_has_richer_fields()` ci-dessous (4-uplet
+    `(obj, leftover, stripped_text, end_index)`, les deux derniers champs
+    ignorés par `_parse_chapter_summaries_batch_json()`, seul autre
+    appelant). Si `raw_decode()` échoue, `_try_repair_stuttered_json()` tente une
     réparation ciblée d'un cas distinct et repéré le 2026-07-20 sur la requête
     de consolidation (`_consolidation_prompt`, la plus longue en sortie) :
     Gemini termine correctement la dernière valeur JSON puis, avant de placer
@@ -649,6 +695,46 @@ sauvegarde JSON et/ou export PDF.
     triés par date de modification, et seuls les `UNPARSABLE_LOGS_MAX_FILES`
     (5) plus récents sont conservés, les plus anciens étant supprimés
     (`unlink(missing_ok=True)`, best-effort comme le reste).
+  - `_leftover_has_richer_fields()` (ajouté le 2026-07-30) détecte un cas
+    distinct des bégaiements ci-dessus, repéré ce jour-là sur "La Compagnie
+    De La Foudre" (gemini-3.6-flash, requête `full_report` en un seul appel) :
+    Gemini a refermé l'objet JSON avec `characters`/`analysis` encore vides à
+    ce stade (`raw_decode()` y voit donc un premier objet syntaxiquement
+    valide, contrairement aux cas de bégaiement qui cassent la syntaxe), puis
+    a continué à écrire ces deux champs à la suite comme si l'objet était
+    resté ouvert, sans nouvelle accolade ouvrante - reconnaissable au
+    `leftover` qui commence directement par une virgule
+    (`,"characters": [...], "analysis": "..."}`). Ce contenu, le seul
+    réellement utile, était donc entièrement relégué dans `leftover` /
+    `BookReport.extra_generated_text` au lieu de remplir la fiche, laissant
+    les onglets Personnages et Analyse vides sans qu'aucune erreur ne le
+    signale (fiche affichée comme un succès). Appelée depuis
+    `_parse_full_report_json()` uniquement (pas
+    `_parse_chapter_summaries_batch_json()`, non concernée par ce schéma de
+    champs) quand `characters` et/ou `analysis` sont vides dans l'objet
+    retenu ET que `leftover` commence par une virgule : reconstitue l'objet
+    tel que Gemini semble avoir voulu l'écrire (`stripped_text[:end_index-1]`
+    - le premier objet sans son accolade fermante - concaténé avec
+    `leftover`) et vérifie par un nouveau `raw_decode()` qu'il contient bien
+    un `characters`/`analysis` non vide que le premier objet retenu n'avait
+    pas. Si oui, `_parse_full_report_json()` lève
+    `GeminiError(tr("gemini_errors.incomplete_first_json_object"))` (loggée au
+    passage via `_log_unparsable_response()`, pour permettre le même
+    diagnostic a posteriori que les autres réponses inexploitables) plutôt que
+    de renvoyer silencieusement une fiche incomplète ; comme toute
+    `GeminiError`, elle invite à recliquer sur "Résumer" et, si elle survient
+    en fin de découpage en lots (requête de consolidation), est transformée en
+    `PartialGenerationError` par le `except GeminiError` englobant de
+    `_generate_book_report_impl()` (reprise possible sans reformuler les lots
+    déjà résumés, même mécanisme que tout autre échec de consolidation).
+    Aucune tentative de récupération automatique du contenu mieux formé : le
+    risque de mélanger deux objets incohérents entre eux (ex. un
+    `detailed_summary` d'une variante avec des `characters` de l'autre) a été
+    jugé plus problématique qu'une régénération. Le prompt `full_report`
+    (`DEFAULT_FULL_REPORT_PROMPT`/`_EN`) interdit en plus désormais
+    explicitement de refermer puis prolonger l'objet JSON, pour réduire la
+    fréquence du problème à la source plutôt que de compter uniquement sur ce
+    filet de sécurité côté code.
   - `_call_gemini()` renvoie désormais un tuple `(text, finish_reason)` (et
     non plus seulement `text`), `finish_reason` étant celui du premier
     candidat (`response.candidates[0].finish_reason`, `None` si aucun
@@ -718,6 +804,37 @@ sauvegarde JSON et/ou export PDF.
     Le marqueur de titre de chapitre inséré par `_chapters_batch_text()`
     (`[[[TITRE: ...]]]`/`[[[TITLE: ...]]]`) suit aussi la langue active, pour
     rester cohérent avec celui annoncé dans le prompt de résumé de lot.
+  - **Résumé détaillé écrasé par le rappel du tome précédent (constaté le
+    2026-07-30 sur le tome 2 d'une série, gemini-3.6-flash)** : contrairement
+    au cas ci-dessus, le JSON produit était complet et syntaxiquement valide
+    (les 4 champs bien remplis, `finish_reason` normal), mais `detailed_summary`
+    faisait environ 2200 caractères contre 2500 pour `summary` - une
+    inversion anormale vu que le prompt vise au moins 1500 mots pour le
+    détaillé contre 2-3 paragraphes pour le court. Le texte produit ne
+    couvrait que le préambule récapitulatif du tome 1 présent en tout début
+    de ce livre, sans jamais aborder l'intrigue propre au tome 2 : le modèle
+    a traité ce rappel comme le contenu principal à détailler plutôt que
+    comme un simple repère de contexte. `DEFAULT_FULL_REPORT_PROMPT`/`_EN` et
+    `DEFAULT_CONSOLIDATION_PROMPT`/`_EN` précisent désormais, dans l'énoncé du
+    point RÉSUMÉ DÉTAILLÉ, qu'un tel rappel explicite d'un tome précédent (un
+    préambule/prologue clairement présenté comme un rappel du passé) doit
+    être mentionné en une ou deux phrases seulement puis suivi de l'essentiel
+    du résumé consacré à l'intrigue de CE livre - en insistant explicitement
+    pour ne jamais confondre ce rappel avec une scène d'ouverture, un
+    prologue ou un flashback faisant partie intégrante de l'histoire du tome
+    en cours (qui doit au contraire rester détaillé normalement) : formulation
+    volontairement prudente pour ne pas faire sous-traiter par erreur un vrai
+    début d'intrigue original sous prétexte qu'il se trouve en tout début de
+    livre. Comme pour le cas ci-dessus, aucun garde-fou côté code (ex.
+    comparaison de longueur entre `summary`/`detailed_summary`) n'a été
+    ajouté à ce stade - régénération de la fiche du tome concerné confirmée
+    suffisante après ce renforcement du prompt, sans qu'on sache si le
+    problème est systématique sur ce type de préambule ou un aléa ponctuel du
+    modèle. `DEFAULT_CHAPTER_SUMMARY_PROMPT`/`_EN` n'a volontairement pas été
+    modifié : il résume chaque chapitre indépendamment (y compris un premier
+    chapitre qui serait un vrai résumé du tome précédent), ce qui reste fidèle
+    à son contenu ; c'est la consolidation (ou l'appel unique) qui doit doser
+    l'espace qui lui est consacré dans le résultat final.
 
 - **`app/prompts_store.py`** : persistance des prompts personnalisés sous la
   clé `"prompts_by_profile"` de `settings.json` (lectures via
@@ -1074,6 +1191,66 @@ sauvegarde JSON et/ou export PDF.
     dupliquer cette logique ici - seul le nombre d'instances est vérifié en
     amont, puisque ce n'est pas une ressource par compte Google mais un
     simple plafond d'ergonomie.
+  - Positionnement en cascade des nouvelles fenêtres (`_size_to_available_screen()`,
+    ajouté le 2026-07-30) : une nouvelle instance apparaissait auparavant
+    exactement à la même position que les fenêtres déjà ouvertes (calcul de
+    centrage fixe), la masquant totalement. Un décalage de `cascade_step = 40`
+    pixels (horizontal et vertical) est désormais appliqué, multiplié par
+    `instance_lock.count_alive_instances()` lu à cet instant précis - AVANT
+    l'appel à `instance_lock.register_instance()` plus loin dans `__init__()`,
+    ce qui donne directement le rang de cette instance parmi celles déjà
+    ouvertes sans compter la sienne. Le décalage est borné
+    (`min(offset, available.width()/height() - width/height)`) pour ne
+    jamais sortir de l'écran disponible quand plusieurs instances
+    s'accumulent, retombant alors sur le bord de l'écran plutôt que de
+    dériver hors champ.
+  - Blocage global du bouton pendant qu'un lancement est en cours (ajouté le
+    2026-07-30, remplace une première tentative par fichier de verrou
+    partagé entre process qui s'est révélée sujette à plusieurs conditions
+    de course non résolues - voir historique de `app/instance_lock.py` :
+    verrous orphelins mal détectés à cause de processus "lanceurs"
+    `python.exe` d'un venv qui se terminent avant le vrai enfant, comptage
+    lu par plusieurs process avant qu'aucun marqueur n'existe encore). Le
+    nouveau mécanisme n'utilise plus aucun fichier partagé entre process, uniquement
+    des canaux `QLocalServer`/`QLocalSocket` (module `PyQt5.QtNetwork`)
+    annoncés explicitement entre fenêtres :
+    - `_setup_new_instance_channel()` (appelée dans `__init__()`, juste après
+      `instance_lock.register_instance()`) ouvre un `QLocalServer` propre à
+      cette instance, nommé via `instance_lock.local_server_name_for_pid(os.getpid())`
+      (`"Distillat_instance_<pid>"`). `QLocalServer.removeServer(server_name)`
+      est appelé avant `listen()` pour nettoyer un éventuel canal fantôme
+      laissé par un crash antérieur (recommandation de la documentation Qt).
+    - Chaque message transporte un contenu texte réel (`"starting"` ou
+      `"ready"`, lu via `readyRead` puis `socket.readAll()`) : une première
+      version ne transmettait qu'une connexion sans contenu et traitait
+      toute connexion entrante comme "ready", ce qui réactivait par erreur
+      le bouton des autres fenêtres au lieu de le désactiver (bug "le
+      blocage n'est pas global" du 2026-07-30).
+    - `_broadcast_new_instance_starting()` (appelée en tête de
+      `_on_new_instance_clicked()`, avant `subprocess.Popen()`) désactive le
+      bouton de cette fenêtre puis envoie `"starting"` (via
+      `_send_instance_message()`) à chaque autre instance vivante
+      (`instance_lock.list_alive_instance_pids()`), qui désactive alors le
+      sien à réception (`_on_instance_message()`).
+    - `_announce_ready_to_all_instances()` (appelée en toute fin de
+      `__init__()`, après `_build_ui()`) réactive directement le bouton de
+      cette fenêtre puis diffuse `"ready"` à toutes les autres instances
+      vivantes, qui réactivent alors le leur.
+    - Le bouton démarre désactivé dès sa création dans `_build_ui()`
+      (`setEnabled(False)`), le temps que l'instance ait fini de s'initialiser
+      et d'ouvrir son propre canal.
+    - `_send_instance_message(pid, message)` : `QLocalSocket.connectToServer()`
+      est asynchrone, l'écriture n'a lieu qu'au signal `connected` (jamais
+      immédiatement après l'appel) ; une instance injoignable (fermée
+      entre-temps, canal pas encore ouvert) est ignorée silencieusement via
+      `errorOccurred`.
+    - `closeEvent()` ferme le serveur (`self._new_instance_server.close()`)
+      à la fermeture propre de la fenêtre, en plus de
+      `instance_lock.unregister_instance()`.
+    - `instance_lock.list_alive_instance_pids()` (nouvelle fonction, dont
+      `count_alive_instances()` n'est plus qu'une façade `len(...)`) expose
+      la liste des PID plutôt que leur seul nombre, nécessaire pour cibler
+      les canaux à notifier.
   - Dialogues : `ProfilesDialog` (gestion des profils de clé API - ajout,
     renommage, modification de la clé, suppression, sélection du profil
     actif de cette instance via le bouton "Utiliser" ; remplace l'ancien

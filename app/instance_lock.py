@@ -273,17 +273,47 @@ def count_alive_instances() -> int:
     est supprimé au passage plutôt que compté, pour ne jamais accumuler
     indéfiniment des marqueurs morts (même esprit que la purge du journal
     d'appels API, voir gemini_client._trim_api_requests_log())."""
-    count = 0
+    return len(list_alive_instance_pids())
+
+
+def list_alive_instance_pids() -> list[int]:
+    """PID de toutes les instances Distillat actuellement vivantes sur la
+    machine (utilisé par count_alive_instances() ci-dessus, et par
+    MainWindow pour savoir à quels canaux QLocalSocket annoncer qu'une
+    nouvelle instance vient de démarrer, voir local_server_name_for_pid()).
+    Même logique de nettoyage des marqueurs orphelins que
+    count_alive_instances() avant sa réécriture sous forme de façade."""
+    pids = []
     for marker_path in config.get_settings_dir().glob(".instance_*.json"):
         try:
             data = json.loads(marker_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        pid = data.get("pid") if isinstance(data, dict) else None
         if isinstance(data, dict) and _owner_is_alive(data):
-            count += 1
+            if isinstance(pid, int):
+                pids.append(pid)
         else:
             try:
                 marker_path.unlink(missing_ok=True)
             except OSError:
                 pass
-    return count
+    return pids
+
+
+def local_server_name_for_pid(pid: int) -> str:
+    """Nom du canal QLocalServer/QLocalSocket propre à l'instance de ce PID,
+    utilisé par MainWindow pour que chaque fenêtre écoute son propre canal
+    (démarré avec register_instance()) et que le bouton "nouvelle instance"
+    d'une fenêtre notifie explicitement toutes les autres fenêtres listées
+    via list_alive_instance_pids() dès que le nouveau process a fini de
+    démarrer - à la place d'un fichier de verrou partagé entre process, dont
+    la mécanique s'est révélée sujette à des conditions de course non
+    résolues lors des tentatives du 2026-07-30 (voir historique de ce
+    module : count_alive_instances() lu par plusieurs process avant qu'aucun
+    marqueur n'existe encore, verrous orphelins mal détectés à cause de
+    processus "lanceurs" (python.exe d'un venv) qui se terminent avant le
+    vrai enfant). Le nom inclut le PID pour être unique par instance, sans
+    dépendre d'un état partagé sur disque : QLocalServer/QLocalSocket gèrent
+    eux-mêmes l'existence du canal."""
+    return f"Distillat_instance_{pid}"

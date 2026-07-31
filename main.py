@@ -10,6 +10,7 @@ from app.main_window import MainWindow
 
 def main() -> None:
     config.migrate_legacy_files()
+    config.copy_sample_reports()
     i18n.init_language()
 
     app = QApplication(sys.argv)

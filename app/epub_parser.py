@@ -1,4 +1,5 @@
 """Extraction du texte et de la table des matières d'un fichier EPUB."""
+import posixpath
 import zipfile
 from dataclasses import dataclass, field
 
@@ -81,12 +82,39 @@ def _get_author(book: epub.EpubBook) -> str:
     return tr("book_parsers.unknown_author")
 
 
+def _first_image_in_document(book: epub.EpubBook, document: epub.EpubItem) -> bytes | None:
+    """Cherche la première image (balise <img src="..."> ou <image href="...">
+    SVG) référencée dans un document XHTML, et retourne son contenu. Le chemin
+    trouvé dans le HTML est relatif au dossier du document lui-même (pas à la
+    racine de l'EPUB ni à l'id du manifest), d'où la résolution via
+    posixpath.normpath avant de chercher l'item correspondant."""
+    soup = BeautifulSoup(document.get_content(), "html.parser")
+    img_tag = soup.find("img", src=True) or soup.find("image", href=True)
+    if img_tag is None:
+        return None
+
+    src = img_tag.get("src") or img_tag.get("href")
+    if not src or src.startswith(("http://", "https://", "data:")):
+        return None
+
+    doc_dir = posixpath.dirname(document.get_name())
+    resolved_href = posixpath.normpath(posixpath.join(doc_dir, src))
+    item = book.get_item_with_href(resolved_href)
+    return item.get_content() if item is not None else None
+
+
 def _find_cover_image_bytes(book: epub.EpubBook) -> bytes | None:
     """Cherche l'image de couverture : d'abord via le type ITEM_COVER, puis via
     la métadonnée <meta name="cover">, puis par convention de nom (fallbacks
     nécessaires car de nombreux EPUB ne taguent pas proprement leur couverture).
-    Le dernier repli reconnaît aussi "fc"/"front" (front cover), convention
-    rencontrée sur des EPUB qui ne mentionnent jamais le mot "cover"."""
+    Le repli "fc"/"front" (front cover) reconnaît une convention rencontrée sur
+    des EPUB qui ne mentionnent jamais le mot "cover". Les deux derniers replis
+    couvrent les EPUB sans aucune métadonnée ni nom de fichier exploitable :
+    une page XHTML dédiée à la couverture (repérée par id/nom "cover", motif
+    EPUB3 courant où l'image est encapsulée dans du XHTML plutôt que déclarée
+    comme image nue) puis, à défaut, la première image de la première page du
+    spine (comme le fait un lecteur EPUB : la couverture est presque toujours
+    la première page visuelle du livre, même sans métadonnée)."""
     for item in book.get_items_of_type(ebooklib.ITEM_COVER):
         return item.get_content()
 
@@ -106,6 +134,22 @@ def _find_cover_image_bytes(book: epub.EpubBook) -> bytes | None:
         item_id = (item.get_id() or "").lower()
         if stem.startswith("fc") or "front" in stem or "front" in item_id:
             return item.get_content()
+
+    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        stem = item.get_name().rsplit("/", 1)[-1].lower()
+        item_id = (item.get_id() or "").lower()
+        if "cover" in stem or "cover" in item_id:
+            image_bytes = _first_image_in_document(book, item)
+            if image_bytes is not None:
+                return image_bytes
+
+    for spine_id, _ in book.spine:
+        item = book.get_item_with_id(spine_id)
+        if item is None or item.get_type() != ebooklib.ITEM_DOCUMENT:
+            continue
+        if isinstance(item, epub.EpubNav) or "nav" in (item.properties or []):
+            continue
+        return _first_image_in_document(book, item)
 
     return None
 
