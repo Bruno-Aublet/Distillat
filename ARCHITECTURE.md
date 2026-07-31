@@ -344,7 +344,14 @@ sauvegarde JSON et/ou export PDF.
   même sur les versions récentes d'`ebooklib` (0.20+) où ce comportement n'est
   plus le défaut ; à ne pas retirer sans vérifier que la table des matières
   reste correctement extraite sur des EPUB2 legacy n'ayant pas de Navigation
-  Document EPUB3.
+  Document EPUB3. `read_epub()` est appelé dans un `try/except
+  (zipfile.BadZipFile, KeyError)` (ajouté le 2026-07-31) : un EPUB dont le
+  manifeste interne (`content.opf`) référence une ressource absente de
+  l'archive fait lever à `ebooklib`/`zipfile` une `KeyError` brute au message
+  technique (ex. "There is no item named '...' in the archive"), remplacée
+  ici par un message traduit (`epub_parser.corrupted_archive`) invitant à
+  retélécharger ou réparer le fichier - EPUB corrompu/mal formé, pas un bug
+  Distillat.
   `_find_cover_image_bytes()` (beaucoup d'EPUB ne taguent pas proprement leur
   couverture) essaie dans l'ordre : type `ITEM_COVER`, métadonnée OPF
   `<meta name="cover">`, nom/id d'image contenant "cover", nom d'image
@@ -779,10 +786,10 @@ sauvegarde JSON et/ou export PDF.
   - **Arrêt prématuré sans erreur (constaté le 2026-07-22 avec gemini-3.6-flash)** :
     `DEFAULT_FULL_REPORT_PROMPT`/`_EN` et `DEFAULT_CONSOLIDATION_PROMPT`/`_EN`
     demandent 4 éléments (`summary`, `detailed_summary`, `characters`,
-    `analysis`) dans un seul objet JSON, mais seul `summary` est vérifié comme
-    obligatoire par `_parse_full_report_json()` (ligne ~1135, `if not summary:
-    raise GeminiError(...)`) - `detailed_summary`/`characters`/`analysis` se
-    replient silencieusement sur une valeur vide si absents, sans lever
+    `analysis`) dans un seul objet JSON, mais seul `summary` était vérifié
+    comme obligatoire par `_parse_full_report_json()` (`if not summary: raise
+    GeminiError(...)`) - `detailed_summary`/`characters`/`analysis` se
+    repliaient silencieusement sur une valeur vide si absents, sans lever
     d'erreur. Un livre généré avec gemini-3.6-flash a ainsi produit un JSON
     syntaxiquement valide et un `finish_reason` normal (pas de troncature),
     mais avec `characters: []` et `analysis: ""`, après un `detailed_summary`
@@ -794,13 +801,39 @@ sauvegarde JSON et/ou export PDF.
     ne t'arrête JAMAIS en cours de route", volontairement non ciblée sur un
     champ précis pour ne pas laisser croire qu'un arrêt après un autre champ
     serait acceptable) ajoutée après l'énumération des 4 éléments, et un
-    rappel similaire juste avant/dans le bloc JSON attendu. Aucun garde-fou
-    côté code (retry automatique si `characters`/`analysis` reviennent vides)
-    n'a été ajouté à ce stade, décision explicite de l'utilisateur - à
-    reconsidérer si le comportement se reproduit malgré le renforcement du
-    prompt. Cette consigne ne s'applique qu'aux prompts par défaut : un
-    prompt personnalisé par l'utilisateur (voir `app/prompts_store.py`) qui
-    remplacerait un de ces 4 templates n'en bénéficie pas automatiquement.
+    rappel similaire juste avant/dans le bloc JSON attendu. Cette consigne ne
+    s'applique qu'aux prompts par défaut : un prompt personnalisé par
+    l'utilisateur (voir `app/prompts_store.py`) qui remplacerait un de ces 4
+    templates n'en bénéficie pas automatiquement.
+
+    Sur le moment, aucun garde-fou côté code (retry automatique si
+    `characters`/`analysis` reviennent vides) n'avait été ajouté, décision
+    explicite de l'utilisateur - à reconsidérer si le comportement se
+    reproduisait malgré le renforcement du prompt. C'est arrivé le 2026-07-31
+    (voir le cas "Artémis" ci-dessous, une manifestation différente du même
+    risque de fond : une réponse par ailleurs syntaxiquement valide mais
+    fonctionnellement incomplète), d'où l'ajout de
+    `_missing_full_report_fields()` : vérifie, une fois les 4 champs extraits
+    dans `_parse_full_report_json()`, lesquels sont vides (`summary`,
+    `detailed_summary`, `characters` et `analysis` traités de façon
+    identique désormais, plus de traitement spécial pour `summary` seul) et
+    lève `GeminiError(tr("gemini_errors.empty_report_fields", ...))` si au
+    moins un l'est, nommant le ou les champs manquants avec les libellés
+    d'onglet déjà connus de l'utilisateur (`main_window.tab_summary`/
+    `tab_detailed_summary`/`tab_characters`/`tab_analysis`, réutilisés tels
+    quels plutôt que dupliqués sous une autre forme). Toujours pas de retry
+    automatique côté code, décision confirmée à cette occasion : la réponse
+    de Gemini est incomplète, il n'y a rien à récupérer ni à deviner de façon
+    fiable, mieux vaut le dire clairement (le message invite explicitement à
+    vérifier visuellement le contenu déjà produit puis à relancer une
+    génération à zéro) que de masquer le problème derrière une tentative de
+    récupération automatique. Comme toute `GeminiError`, ce nouveau cas
+    profite déjà du mécanisme existant qui la transforme en
+    `PartialGenerationError` quand il survient en fin de consolidation
+    (reprise possible sans reformuler les lots déjà résumés). La clé de
+    traduction `no_usable_summary`, devenue inutile (`summary` vide est
+    désormais couvert par `empty_report_fields` comme les 3 autres champs),
+    a été retirée de `locales/fr.json`/`en.json`.
     Le marqueur de titre de chapitre inséré par `_chapters_batch_text()`
     (`[[[TITRE: ...]]]`/`[[[TITLE: ...]]]`) suit aussi la langue active, pour
     rester cohérent avec celui annoncé dans le prompt de résumé de lot.
@@ -835,6 +868,45 @@ sauvegarde JSON et/ou export PDF.
     chapitre qui serait un vrai résumé du tome précédent), ce qui reste fidèle
     à son contenu ; c'est la consolidation (ou l'appel unique) qui doit doser
     l'espace qui lui est consacré dans le résultat final.
+  - **Retour à la ligne brut cassant le JSON en plein milieu (constaté le
+    2026-07-31 sur "Artémis" d'Andy Weir, gemini-3.6-flash, `full_report`)** :
+    troisième mode de défaillance, distinct des deux ci-dessus. Contrairement
+    au bégaiement de fin de génération et à l'arrêt prématuré, la cassure ne
+    survient pas en fin de réponse mais au MILIEU du champ `detailed_summary`,
+    à chaque transition de section : Gemini a inséré un caractère de contrôle
+    littéral (retour à la ligne brut) juste avant un `\n` échappé, au lieu
+    d'écrire simplement `\n\n` échappé comme partout ailleurs dans le même
+    champ (`..."contrôle !"` suivi d'un vrai saut de ligne puis de
+    `\n## Chapitre 12...`, motif répété une seconde fois plus loin dans la
+    même réponse). Un caractère de contrôle littéral dans une chaîne JSON
+    étant syntaxiquement invalide (RFC 8259), `raw_decode()` échoue
+    immédiatement avec `json.JSONDecodeError: Invalid control character`,
+    avant même de produire un premier objet exploitable : aucune des
+    réparations existantes (`_try_repair_stuttered_json`,
+    `_leftover_has_richer_fields`) ne pouvait s'appliquer, toutes deux conçues
+    pour une cassure en fin de réponse. `_escape_raw_control_chars_in_strings()`
+    répare désormais ce cas : appelée depuis `_parse_json_object()` comme
+    premier repli (avant la réparation de bégaiement), uniquement quand le
+    message de `JSONDecodeError` contient "control character". Elle parcourt
+    le texte en suivant l'état "dans une chaîne JSON / hors chaîne" (en tenant
+    compte des guillemets et antislashs échappés, `\"` et `\\`, pour ne jamais
+    désynchroniser cet état) et ré-échappe tout `\n`/`\r`/`\t` littéral
+    rencontré DANS une chaîne, sans jamais toucher aux retours à la ligne
+    d'indentation légitimes entre les champs de l'objet (ceux-là sont hors
+    chaîne). Ne modifie jamais un JSON par ailleurs valide (n'est tentée
+    qu'après un premier échec de `raw_decode()`, jamais avant). Validée sur le
+    fichier de diagnostic réel de ce cas (les 4 champs se parsent alors
+    correctement, `characters` et `analysis` non vides) et sur des cas
+    synthétiques (JSON déjà valide inchangé, échappements imbriqués,
+    indentation hors chaîne préservée, cas limite antislash immédiatement
+    suivi d'un retour à la ligne brut). En complément, les 4 templates par
+    défaut (`full_report`/`consolidation`, FR/EN) précisent désormais
+    explicitement de toujours utiliser la séquence échappée `\n` dans les
+    valeurs de chaîne (jamais de retour à la ligne brut, y compris entre deux
+    sections du résumé détaillé), et demandent une relecture finale de
+    l'objet JSON une fois terminé pour vérifier que les 4 champs sont bien
+    tous non vides avant de conclure - renforcement de prompt en plus de la
+    réparation côté code, à la manière du cas d'arrêt prématuré ci-dessus.
 
 - **`app/prompts_store.py`** : persistance des prompts personnalisés sous la
   clé `"prompts_by_profile"` de `settings.json` (lectures via
@@ -1316,9 +1388,10 @@ sauvegarde JSON et/ou export PDF.
     synchronisait pas avec l'état logique du widget sans ce repaint explicite,
     bug constaté le 2026-07-20), `ExtraTextDialog`
     (non modale, pour le contenu superflu de Gemini), `LicenseDialog`,
-    `ChangelogDialog` (affiche `CHANGELOG.md`, même mécanisme de résolution de
-    chemin que `LicenseDialog` via `config.get_resource_dir()`, bundlé à la
-    compilation via `distillat.spec`), `QuotaHelpDialog` (texte statique fixe,
+    `ChangelogDialog` (affiche `CHANGELOG.md` via `setMarkdown()` pour un
+    rendu mis en forme plutôt que les balises brutes, même mécanisme de
+    résolution de chemin que `LicenseDialog` via `config.get_resource_dir()`,
+    bundlé à la compilation via `distillat.spec`), `QuotaHelpDialog` (texte statique fixe,
     sans jargon technique, expliquant le fonctionnement des quotas/requêtes
     Gemini au public non technique : ouverte via le bouton `?` placé à gauche
     de `status_label`, ajouté le 2026-07-21). Tous ces dialogues utilisent un

@@ -9,7 +9,8 @@
   "epub_parser": {
     "fallback_chapter_title": "Chapitre {index}",
     "no_text_extracted": "Aucun contenu textuel n'a pu être extrait de cet EPUB.",
-    "uncompressed_too_large": "Ce fichier EPUB déclare un contenu décompressé anormalement volumineux ({size_mb} Mo, plafond : {max_mb} Mo) et a été refusé par précaution : il s'agit probablement d'un fichier corrompu ou piégé, pas d'un vrai livre."
+    "uncompressed_too_large": "Ce fichier EPUB déclare un contenu décompressé anormalement volumineux ({size_mb} Mo, plafond : {max_mb} Mo) et a été refusé par précaution : il s'agit probablement d'un fichier corrompu ou piégé, pas d'un vrai livre.",
+    "corrupted_archive": "Ce fichier EPUB semble corrompu ou mal formé (une ressource interne qu'il déclare est introuvable dans l'archive) et n'a pas pu être ouvert. Essayez de retélécharger le fichier depuis sa source d'origine, ou de le réparer avec un outil comme Calibre."
   },
   "pdf_parser": {
     "no_text_extracted": "Aucun texte n'a pu être extrait de ce PDF (il s'agit peut-être d'un scan sans OCR).",
@@ -37,8 +38,8 @@
     "unreadable_response": "Réponse de Gemini illisible (format inattendu) : {error}",
     "truncated_response": "Réponse de Gemini interrompue en cours de génération car trop longue (limite de longueur du modèle atteinte) : le contenu reçu est incomplet et inexploitable.",
     "unexpected_response_shape": "La réponse de Gemini n'a pas la forme attendue (racine JSON non exploitable).",
-    "no_usable_summary": "La réponse de Gemini ne contient pas de résumé exploitable.",
-    "incomplete_first_json_object": "Gemini a produit une réponse incomplète (personnages et/ou analyse manquants) suivie d'une seconde tentative plus complète dans la même réponse : pour éviter une fiche incomplète, cette génération est annulée. Recliquez sur Résumer pour réessayer."
+    "incomplete_first_json_object": "Gemini a produit une réponse incomplète (personnages et/ou analyse manquants) suivie d'une seconde tentative plus complète dans la même réponse : pour éviter une fiche incomplète, cette génération est annulée. Recliquez sur Résumer pour réessayer.",
+    "empty_report_fields": "Gemini n'a pas produit de contenu pour : {field_names}. Cela arrive parfois : Gemini ne respecte pas toujours les consignes demandées. Vérifiez visuellement ce qui a été généré, mais il n'y a normalement rien à récupérer ici puisque la réponse elle-même est incomplète : mieux vaut recliquer sur Résumer pour relancer une génération à zéro."
   },
   "gemini_progress": {
     "counting_tokens": "Comptage des tokens du texte extrait…",
@@ -46,7 +47,7 @@
     "book_too_large": "Livre trop volumineux ({token_count} tokens). Découpage en {batch_count} lot(s) de chapitres ({chapter_count} chapitres au total)…",
     "summarizing_batch": "Résumé du lot de chapitres {current}/{total}…",
     "batch_summarized": "Lot de chapitres {current}/{total} résumé.",
-    "merging_summaries": "Résumés fusionnés. Identification des personnages et rédaction de l'analyse…",
+    "merging_summaries": "Fusion des résumés. Identification des personnages et rédaction de l'analyse…",
     "done": "Résumé, personnages et analyse terminés."
   },
   "worker_progress": {

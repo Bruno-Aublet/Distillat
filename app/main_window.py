@@ -114,7 +114,7 @@ class ChangelogDialog(QDialog):
 
         changelog_path = config.get_resource_dir() / "CHANGELOG.md"
         try:
-            changelog_view.setPlainText(changelog_path.read_text(encoding="utf-8"))
+            changelog_view.setMarkdown(changelog_path.read_text(encoding="utf-8"))
         except OSError:
             changelog_view.setPlainText(
                 tr("changelog_dialog.file_not_found", changelog_path=changelog_path)

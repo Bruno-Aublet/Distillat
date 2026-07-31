@@ -184,7 +184,16 @@ def parse_epub(file_path: str) -> BookContent:
     """Parcourt l'EPUB dans l'ordre de lecture (spine) et découpe par chapitre
     en utilisant la table des matières quand elle est disponible."""
     _check_uncompressed_size(file_path)
-    book = epub.read_epub(file_path, options={"ignore_ncx": False})
+    try:
+        book = epub.read_epub(file_path, options={"ignore_ncx": False})
+    except (zipfile.BadZipFile, KeyError) as exc:
+        # ebooklib/zipfile lèvent une KeyError brute (ex: "There is no item
+        # named '...' in the archive") quand le manifeste interne de l'EPUB
+        # référence une ressource absente de l'archive : signe d'un EPUB
+        # corrompu ou mal formé, pas d'un bug Distillat. On la remplace par un
+        # message clair plutôt que de laisser remonter l'erreur technique
+        # brute jusqu'à l'utilisateur.
+        raise ValueError(tr("epub_parser.corrupted_archive")) from exc
 
     toc_map = _build_toc_map(book)
 

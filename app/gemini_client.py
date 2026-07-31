@@ -556,7 +556,12 @@ jamais "characters" vide ou "analysis" vide, quel que soit le nombre de mots dé
 les champs précédents. Ne produis QU'UN SEUL objet JSON en tout et pour tout : si tu réalises \
 après coup qu'un champ de l'objet déjà commencé est insuffisant, corrige-le à l'intérieur de ce \
 même objet avant de le refermer - ne referme jamais cet objet pour en recommencer un second, même \
-plus complet, à la suite :
+plus complet, à la suite. À l'intérieur de chaque valeur de chaîne, n'insère jamais de retour à la \
+ligne brut : utilise toujours la séquence échappée \\n, y compris entre deux sections du résumé \
+détaillé - un retour à la ligne littéral y rendrait le JSON invalide. Une fois l'objet terminé, \
+relis-le mentalement et vérifie qu'il contient bien les quatre champs "summary", \
+"detailed_summary", "characters" et "analysis" non vides avant de considérer ta réponse complète ; \
+si l'un d'eux manque ou est vide, complète-le avant de conclure :
 {{
   "summary": "Le résumé court ici, en français...",
   "detailed_summary": "Le résumé détaillé et développé ici, en français...",
@@ -648,7 +653,12 @@ de l'œuvre - développée et argumentée, sans répéter le contenu déjà couv
 Réponds STRICTEMENT avec un objet JSON valide, sans aucun texte avant ou après, ni fences \
 markdown, au format exact. Les quatre champs ci-dessous sont tous obligatoires : ne renvoie \
 jamais "characters" vide ou "analysis" vide, quel que soit le nombre de mots déjà produits pour \
-les champs précédents :
+les champs précédents. À l'intérieur de chaque valeur de chaîne, n'insère jamais de retour à la \
+ligne brut : utilise toujours la séquence échappée \\n, y compris entre deux sections du résumé \
+détaillé - un retour à la ligne littéral y rendrait le JSON invalide. Une fois l'objet terminé, \
+relis-le mentalement et vérifie qu'il contient bien les quatre champs "summary", \
+"detailed_summary", "characters" et "analysis" non vides avant de considérer ta réponse complète ; \
+si l'un d'eux manque ou est vide, complète-le avant de conclure :
 {{
   "summary": "Le résumé court ici, en français...",
   "detailed_summary": "Le résumé détaillé et développé ici, en français...",
@@ -704,7 +714,12 @@ fences, in the exact format. All four fields below are mandatory: never return a
 "characters" or an empty "analysis", no matter how many words you have already produced for the \
 preceding fields. Produce EXACTLY ONE JSON object in total: if you realize afterwards that a field \
 in the object you already started is insufficient, fix it inside that same object before closing \
-it - never close this object to start a second one, even a more complete one, afterwards:
+it - never close this object to start a second one, even a more complete one, afterwards. Inside \
+every string value, never insert a raw line break: always use the escaped \\n sequence, including \
+between two sections of the detailed summary - a literal line break there would make the JSON \
+invalid. Once the object is finished, mentally re-read it and check that it actually contains all \
+four fields "summary", "detailed_summary", "characters" and "analysis" non-empty before considering \
+your answer complete; if any of them is missing or empty, fill it in before concluding:
 {{
   "summary": "The short summary here, in English...",
   "detailed_summary": "The detailed, developed summary here, in English...",
@@ -792,7 +807,12 @@ covering the main themes, the writing style and narrative construction, then the
 Respond STRICTLY with a valid JSON object, with no text whatsoever before or after, no markdown \
 fences, in the exact format. All four fields below are mandatory: never return an empty \
 "characters" or an empty "analysis", no matter how many words you have already produced for the \
-preceding fields:
+preceding fields. Inside every string value, never insert a raw line break: always use the escaped \
+\\n sequence, including between two sections of the detailed summary - a literal line break there \
+would make the JSON invalid. Once the object is finished, mentally re-read it and check that it \
+actually contains all four fields "summary", "detailed_summary", "characters" and "analysis" \
+non-empty before considering your answer complete; if any of them is missing or empty, fill it in \
+before concluding:
 {{
   "summary": "The short summary here, in English...",
   "detailed_summary": "The detailed, developed summary here, in English...",
@@ -1102,6 +1122,51 @@ def _log_unparsable_response(raw_text: str, context_label: str, error: Exception
         pass
 
 
+_JSON_ESCAPABLE_CONTROL_CHARS = {"\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def _escape_raw_control_chars_in_strings(text: str) -> str:
+    """Ré-échappe les caractères de contrôle (retour à la ligne, tabulation...)
+    littéraux que Gemini insère parfois directement à l'intérieur d'une valeur
+    de chaîne JSON, au lieu de la séquence échappée attendue (\\n, \\r, \\t) -
+    cas distinct des bégaiements de fin de génération gérés par
+    _try_repair_stuttered_json : ici la syntaxe casse au MILIEU du texte,
+    à un endroit quelconque, sans toucher à la structure de l'objet (le reste
+    du JSON de part et d'autre est par ailleurs valide).
+
+    Repéré le 2026-07-31 sur "Artémis" (gemini-3.6-flash, full_report) : au
+    moins deux ruptures de section dans detailed_summary ("...contrôle !"
+    suivi d'un retour à la ligne brut puis de "\\n## Chapitre 12...") avaient
+    un retour à la ligne littéral au lieu du "\\n\\n" échappé visible partout
+    ailleurs dans le même champ, cassant raw_decode() avec "Invalid control
+    character" avant même une première tentative de parsing.
+
+    Parcourt le texte en suivant l'état "dans une chaîne JSON / hors chaîne"
+    (en tenant compte des guillemets et antislashs échappés, \\" et \\\\, pour
+    ne jamais désynchroniser cet état) ; ne modifie que les caractères de
+    contrôle trouvés DANS une chaîne, jamais ceux qui séparent normalement les
+    éléments de l'objet JSON (retours à la ligne d'indentation entre les
+    clés, par exemple)."""
+    result = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            elif char in _JSON_ESCAPABLE_CONTROL_CHARS:
+                result.append(_JSON_ESCAPABLE_CONTROL_CHARS[char])
+                continue
+        elif char == '"':
+            in_string = True
+        result.append(char)
+    return "".join(result)
+
+
 def _parse_json_object(
     raw_text: str, context_label: str = "unknown", finish_reason: str | None = None
 ) -> tuple[dict, str, str, int]:
@@ -1136,6 +1201,23 @@ def _parse_json_object(
     try:
         obj, end_index = json.JSONDecoder().raw_decode(text)
     except json.JSONDecodeError as exc:
+        # Repli 1 : caractère de contrôle littéral (retour à la ligne...)
+        # laissé par erreur à l'intérieur d'une chaîne JSON, cassant la
+        # syntaxe en plein milieu du texte (voir
+        # _escape_raw_control_chars_in_strings). Tenté avant le repli
+        # bégaiement ci-dessous car il n'a aucune raison de modifier un JSON
+        # par ailleurs valide (il ne touche qu'à un caractère normalement
+        # interdit dans une chaîne JSON) et peut, une fois réparé, rendre le
+        # texte à nouveau directement décodable.
+        if "control character" in str(exc).lower():
+            control_fixed_text = _escape_raw_control_chars_in_strings(text)
+            try:
+                obj, end_index = json.JSONDecoder().raw_decode(control_fixed_text)
+            except json.JSONDecodeError:
+                pass
+            else:
+                leftover = control_fixed_text[end_index:].strip()
+                return obj, leftover, control_fixed_text, end_index
         repaired = _try_repair_stuttered_json(text)
         if repaired is not None:
             # Le bégaiement réparé ici casse la syntaxe de l'objet lui-même
@@ -1212,6 +1294,35 @@ def _leftover_has_richer_fields(
     return (not characters and extra_has_characters) or (not analysis and extra_has_analysis)
 
 
+def _missing_full_report_fields(
+    summary: str, detailed_summary: str, characters: list[Character], analysis: str
+) -> list[str]:
+    """Renvoie les noms (traduits, ceux affichés sur les onglets de la fenêtre
+    principale) des champs demandés à Gemini qui reviennent vides, dans
+    l'ordre où ils apparaissent dans la fiche. Ajouté le 2026-07-31 : jusque
+    là, seul `summary` vide levait une erreur (`no_usable_summary`) ;
+    `detailed_summary`/`characters`/`analysis` vides se repliaient
+    silencieusement sur une valeur vide, produisant une fiche affichée comme
+    un succès mais incomplète (cas déjà documenté dans ARCHITECTURE.md pour
+    `characters`/`analysis`, jamais couvert pour `detailed_summary` seul).
+    Unifie les quatre champs sous le même contrôle plutôt que de garder un
+    traitement spécial pour `summary` seul, décision explicite de
+    l'utilisateur plutôt qu'un retry automatique côté code : la réponse de
+    Gemini est incomplète, il n'y a rien à récupérer ni à deviner, mieux vaut
+    prévenir clairement l'utilisateur et le laisser choisir de relancer une
+    génération à zéro."""
+    missing = []
+    if not summary:
+        missing.append(tr("main_window.tab_summary"))
+    if not detailed_summary:
+        missing.append(tr("main_window.tab_detailed_summary"))
+    if not characters:
+        missing.append(tr("main_window.tab_characters"))
+    if not analysis:
+        missing.append(tr("main_window.tab_analysis"))
+    return missing
+
+
 def _parse_full_report_json(
     raw_text: str, context_label: str = "full_report", finish_reason: str | None = None
 ) -> tuple[str, str, list[Character], str, str]:
@@ -1234,12 +1345,14 @@ def _parse_full_report_json(
     analysis = _normalize_dashes(str(data.get("analysis", "")).strip())
     characters = _parse_characters_list(data.get("characters", []))
 
-    if not summary:
-        raise GeminiError(tr("gemini_errors.no_usable_summary"))
-
     if leftover and _leftover_has_richer_fields(stripped_text, end_index, leftover, characters, analysis):
         _log_unparsable_response(raw_text, context_label, ValueError("objet JSON refermé prématurément puis prolongé dans le leftover"))
         raise GeminiError(tr("gemini_errors.incomplete_first_json_object"))
+
+    missing_fields = _missing_full_report_fields(summary, detailed_summary, characters, analysis)
+    if missing_fields:
+        _log_unparsable_response(raw_text, context_label, ValueError(f"champ(s) vide(s) : {', '.join(missing_fields)}"))
+        raise GeminiError(tr("gemini_errors.empty_report_fields", field_names=", ".join(missing_fields)))
 
     return summary, detailed_summary, characters, analysis, leftover
 

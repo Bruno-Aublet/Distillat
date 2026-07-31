@@ -9,7 +9,8 @@
   "epub_parser": {
     "fallback_chapter_title": "Chapter {index}",
     "no_text_extracted": "No text content could be extracted from this EPUB.",
-    "uncompressed_too_large": "This EPUB file declares an abnormally large uncompressed content ({size_mb} MB, limit: {max_mb} MB) and was rejected as a precaution: it is most likely a corrupted or booby-trapped file, not a real book."
+    "uncompressed_too_large": "This EPUB file declares an abnormally large uncompressed content ({size_mb} MB, limit: {max_mb} MB) and was rejected as a precaution: it is most likely a corrupted or booby-trapped file, not a real book.",
+    "corrupted_archive": "This EPUB file appears to be corrupted or malformed (an internal resource it declares could not be found in the archive) and could not be opened. Try re-downloading the file from its original source, or repairing it with a tool such as Calibre."
   },
   "pdf_parser": {
     "no_text_extracted": "No text could be extracted from this PDF (it may be a scan without OCR).",
@@ -37,8 +38,8 @@
     "unreadable_response": "Unreadable response from Gemini (unexpected format): {error}",
     "truncated_response": "Gemini's response was cut off mid-generation because it was too long (the model's length limit was reached): the content received is incomplete and unusable.",
     "unexpected_response_shape": "The Gemini response does not have the expected shape (unusable JSON root).",
-    "no_usable_summary": "The Gemini response does not contain a usable summary.",
-    "incomplete_first_json_object": "Gemini produced an incomplete response (missing characters and/or analysis) followed by a more complete second attempt within the same response: to avoid an incomplete report, this generation has been cancelled. Click Summarize again to retry."
+    "incomplete_first_json_object": "Gemini produced an incomplete response (missing characters and/or analysis) followed by a more complete second attempt within the same response: to avoid an incomplete report, this generation has been cancelled. Click Summarize again to retry.",
+    "empty_report_fields": "Gemini did not produce content for: {field_names}. This happens occasionally: Gemini does not always follow the requested instructions. Feel free to check visually what was generated, but there is normally nothing to recover here since the response itself is incomplete: it is best to click Summarize again to start a new generation from scratch."
   },
   "gemini_progress": {
     "counting_tokens": "Counting tokens of the extracted text…",
@@ -46,7 +47,7 @@
     "book_too_large": "Book too large ({token_count} tokens). Splitting into {batch_count} chapter batch(es) ({chapter_count} chapters in total)…",
     "summarizing_batch": "Summarizing chapter batch {current}/{total}…",
     "batch_summarized": "Chapter batch {current}/{total} summarized.",
-    "merging_summaries": "Summaries merged. Identifying characters and writing the analysis…",
+    "merging_summaries": "Merging summaries. Identifying characters and writing the analysis…",
     "done": "Summary, characters, and analysis completed."
   },
   "worker_progress": {
