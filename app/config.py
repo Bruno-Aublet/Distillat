@@ -57,6 +57,16 @@ def get_app_icon_path() -> Path:
     return get_resource_dir() / "icons" / "open-book_4681875.png"
 
 
+def get_mosaicview_logo_path() -> Path:
+    """Chemin du logo MosaicView (fenêtre "Publicité éhontée")."""
+    return get_resource_dir() / "icons" / "MosaicView.png"
+
+
+def get_mosaicview_exe_icon_path() -> Path:
+    """Chemin de l'icône d'exécutable MosaicView (fenêtre "Publicité éhontée")."""
+    return get_resource_dir() / "icons" / "MosaicView_exe.png"
+
+
 def get_success_sound_path() -> Path:
     """Chemin du son joué lorsqu'une fiche est générée avec succès."""
     return get_resource_dir() / "assets" / "success.wav"

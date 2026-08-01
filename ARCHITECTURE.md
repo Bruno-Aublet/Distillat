@@ -57,11 +57,17 @@ sauvegarde JSON et/ou export PDF.
   - `Documents\Distillat\Fiches` (toujours) comme dossier de repli initial
     pour les fiches `.distillat.json` et les exports PDF, tant qu'aucun
     dossier n'a encore été mémorisé (voir ci-dessous).
-  - `get_resource_dir()`/`get_app_icon_path()`/`get_success_sound_path()` :
-    résolution des ressources embarquées à la compilation (icône, son de fin
-    de génération `assets/success.wav`, `LICENSE`, `CHANGELOG.md`) - même
-    logique `sys._MEIPASS` en mode gelé que pour le reste de `get_resource_dir()`,
+  - `get_resource_dir()`/`get_app_icon_path()`/`get_success_sound_path()`/
+    `get_mosaicview_logo_path()`/`get_mosaicview_exe_icon_path()` (ces deux
+    derniers ajoutés le 2026-08-01 pour `MosaicViewAdDialog`, voir
+    `app/main_window.py` ci-dessous) : résolution des ressources embarquées à
+    la compilation (icône, son de fin de génération `assets/success.wav`,
+    `LICENSE`, `CHANGELOG.md`, logos MosaicView) - même logique
+    `sys._MEIPASS` en mode gelé que pour le reste de `get_resource_dir()`,
     pour ne jamais dupliquer leur emplacement selon le mode de lancement.
+    Toute nouvelle image sous `icons/` ajoutée par ce biais doit aussi être
+    déclarée dans les `datas` de `distillat.spec`, sans quoi elle ne serait
+    pas trouvée en mode compilé (fichier absent de `_MEIPASS`).
   - `copy_sample_reports()` (appelée depuis `main.py` à chaque démarrage) :
     copie dans `get_reports_dir()` les fiches d'exemple `*.distillat.json` du
     dossier `Fiches/` du projet, embarqué sous `get_resource_dir()/Fiches` en
@@ -267,6 +273,20 @@ sauvegarde JSON et/ou export PDF.
   `PendingResumesDialog` et au refus anticipé de `_on_summarize_clicked()`
   quand un état de reprise fournit déjà le hash. Un crash laisse un verrou
   orphelin, démasqué comme pour les profils par `_owner_is_alive()`.
+  Depuis le 2026-08-01, ce même verrou est aussi pris plus tôt qu'avant, dès
+  la simple sélection d'un livre correspondant à un état de reprise en
+  attente (`MainWindow._lock_selected_resume_state()`, appelée par
+  `_on_file_selected()`) et non plus seulement au clic sur "Résumer" : sans
+  cela, deux instances pouvaient sélectionner le même livre en attente sans
+  aucun avertissement tant qu'aucune n'avait lancé sa génération. Relâché par
+  `MainWindow._release_selection_lock()` (retrait du fichier, sélection d'un
+  autre fichier, fermeture de la fenêtre) ou juste avant `worker.start()`
+  dans `_on_summarize_clicked()` - le worker reprend alors aussitôt le même
+  verrou de son propre côté (`acquire_book_lock()`, même PID donc succès
+  immédiat), sans jamais laisser de fenêtre où le livre apparaîtrait
+  déverrouillé entre les deux. Voir aussi le paragraphe dédié dans
+  `MainWindow` plus bas pour `pending_resumes_button` et le message
+  `"resumes_changed"` diffusé sur le canal `QLocalServer`/`QLocalSocket`.
 
   Mécanisme distinct (ajouté le 2026-07-22 avec le bouton "nouvelle
   instance" du header de `MainWindow`, à droite du titre) : comptage des
@@ -906,24 +926,45 @@ sauvegarde JSON et/ou export PDF.
     `_missing_full_report_fields()` : vérifie, une fois les 4 champs extraits
     dans `_parse_full_report_json()`, lesquels sont vides (`summary`,
     `detailed_summary`, `characters` et `analysis` traités de façon
-    identique désormais, plus de traitement spécial pour `summary` seul) et
-    lève `GeminiError(tr("gemini_errors.empty_report_fields", ...))` si au
-    moins un l'est, nommant le ou les champs manquants avec les libellés
-    d'onglet déjà connus de l'utilisateur (`main_window.tab_summary`/
-    `tab_detailed_summary`/`tab_characters`/`tab_analysis`, réutilisés tels
-    quels plutôt que dupliqués sous une autre forme). Toujours pas de retry
-    automatique côté code, décision confirmée à cette occasion : la réponse
-    de Gemini est incomplète, il n'y a rien à récupérer ni à deviner de façon
-    fiable, mieux vaut le dire clairement (le message invite explicitement à
-    vérifier visuellement le contenu déjà produit puis à relancer une
-    génération à zéro) que de masquer le problème derrière une tentative de
-    récupération automatique. Comme toute `GeminiError`, ce nouveau cas
-    profite déjà du mécanisme existant qui la transforme en
-    `PartialGenerationError` quand il survient en fin de consolidation
-    (reprise possible sans reformuler les lots déjà résumés). La clé de
-    traduction `no_usable_summary`, devenue inutile (`summary` vide est
-    désormais couvert par `empty_report_fields` comme les 3 autres champs),
-    a été retirée de `locales/fr.json`/`en.json`.
+    identique désormais, plus de traitement spécial pour `summary` seul),
+    nommant le ou les champs manquants avec les libellés d'onglet déjà connus
+    de l'utilisateur (`main_window.tab_summary`/`tab_detailed_summary`/
+    `tab_characters`/`tab_analysis`, réutilisés tels quels plutôt que
+    dupliqués sous une autre forme). La clé de traduction `no_usable_summary`,
+    devenue inutile (`summary` vide est désormais couvert par
+    `empty_report_fields` comme les 3 autres champs), a été retirée de
+    `locales/fr.json`/`en.json`.
+
+    Jusqu'au 2026-08-01, `_parse_full_report_json()` levait directement
+    `GeminiError(tr("gemini_errors.empty_report_fields", ...))` dès qu'au
+    moins un champ était vide, rejetant toute la fiche (aucun `BookReport`
+    construit, donc aucun onglet affiché, même pour les champs par ailleurs
+    bien générés) : constaté trompeur en pratique sur un cas réel où
+    `summary`/`detailed_summary` avaient été produits normalement mais
+    `characters`/`analysis` étaient vides - le message ne citait que ces deux
+    champs, mais l'utilisateur voyait les 4 onglets vides sans aucun moyen de
+    savoir que 2 d'entre eux avaient pourtant été générés avec succès.
+    `_parse_full_report_json()` ne lève donc plus d'erreur pour ce cas : elle
+    renvoie en plus la liste des champs manquants (`missing_fields`),
+    propagée jusqu'au `BookReport` retourné (nouveau champ
+    `BookReport.missing_fields: list[str]`, jamais persisté ni sérialisé,
+    comme `extra_generated_text`). `main_window._on_finished_ok()` affiche
+    donc toujours la fiche, même partielle, puis un `QMessageBox.warning`
+    (titre `main_window.warning_title`, nouveau) listant les champs vides
+    s'il y en a - à la place du `QMessageBox.critical` bloquant d'avant, qui
+    empêchait tout affichage. Toujours pas de retry automatique côté code : la
+    réponse de Gemini reste incomplète pour les champs cités, rien à deviner
+    de façon fiable à leur sujet, mais les champs valides ne sont plus
+    sacrifiés avec eux. Le seul cas qui reste bloquant (rejet total, voir le
+    cas "Compagnie de la Foudre" ci-dessous) est le bégaiement JSON détecté
+    par `_leftover_has_richer_fields()` : protection distincte, contre un
+    contenu potentiellement récupérable mais mal interprété, pas de simples
+    champs vides. Comme toute `GeminiError` restante (bégaiement, réponse
+    illisible...), ce mécanisme profite du mécanisme existant qui la
+    transforme en `PartialGenerationError` quand elle survient en fin de
+    consolidation (reprise possible sans reformuler les lots déjà résumés) ;
+    ce n'est en revanche plus le cas pour de simples champs vides, qui
+    n'interrompent plus la génération.
     Le marqueur de titre de chapitre inséré par `_chapters_batch_text()`
     (`[[[TITRE: ...]]]`/`[[[TITLE: ...]]]`) suit aussi la langue active, pour
     rester cohérent avec celui annoncé dans le prompt de résumé de lot.
@@ -1229,6 +1270,13 @@ sauvegarde JSON et/ou export PDF.
   `FILE_FORMAT_VERSION = 2`). `extra_generated_text` existe uniquement en
   mémoire (jamais persisté, ni JSON ni PDF) : contenu superflu généré par
   Gemini, à la disposition de l'utilisateur via l'UI mais pas de la fiche.
+  `missing_fields` (ajouté le 2026-08-01, même philosophie que
+  `extra_generated_text` : jamais persisté ni sérialisé) porte les libellés
+  d'onglet des champs que Gemini a renvoyés vides lors de cette génération,
+  affichés une seule fois en avertissement par `main_window._on_finished_ok()`
+  juste après affichage de la fiche - voir `app/gemini_client.py` ci-dessous
+  pour le détail du changement de comportement (fiche partielle affichée au
+  lieu d'un rejet total).
   `from_json()`/`load()` ne réécrivent jamais le fichier source (même si la
   couverture est recompressée au passage, en mémoire uniquement) : une
   simple lecture ne doit jamais modifier le fichier lu. La couverture base64
@@ -1413,6 +1461,21 @@ sauvegarde JSON et/ou export PDF.
       `count_alive_instances()` n'est plus qu'une façade `len(...)`) expose
       la liste des PID plutôt que leur seul nombre, nécessaire pour cibler
       les canaux à notifier.
+    - Depuis le 2026-08-01, ce même canal transporte aussi un troisième
+      message, `"resumes_changed"` (`_on_instance_message()` appelle alors
+      `_refresh_pending_resumes_button()`), diffusé par
+      `_broadcast_resumes_changed()` à chaque acquisition ou relâchement du
+      verrou de sélection sur un livre en attente (voir
+      `_lock_selected_resume_state()`/`_release_selection_lock()` et le
+      paragraphe `pending_resumes_button` plus bas) : chaque fenêtre
+      rafraîchit alors instantanément son bouton "Reprises en attente" sans
+      aucun polling, un premier essai à base de `QTimer` (1 s, sur le modèle
+      de `PendingResumesDialog._refresh_locked_states()`) s'étant révélé trop
+      lent à l'usage (délai perceptible avant qu'une autre fenêtre ne se
+      grise). Le `QTimer` de `pending_resumes_button` (voir plus bas) reste
+      néanmoins en place, à un intervalle bien plus large (15 s) : il ne sert
+      plus que de filet de secours pour l'unique cas non couvert par ce
+      canal, une instance injoignable au moment de la diffusion.
   - Dialogues : `ProfilesDialog` (gestion des profils de clé API - ajout,
     renommage, modification de la clé, suppression, sélection du profil
     actif de cette instance via le bouton "Utiliser" ; remplace l'ancien
@@ -1484,7 +1547,16 @@ sauvegarde JSON et/ou export PDF.
     bundlé à la compilation via `distillat.spec`), `QuotaHelpDialog` (texte statique fixe,
     sans jargon technique, expliquant le fonctionnement des quotas/requêtes
     Gemini au public non technique : ouverte via le bouton `?` placé à gauche
-    de `status_label`, ajouté le 2026-07-21). Tous ces dialogues utilisent un
+    de `status_label`, ajouté le 2026-07-21), `MosaicViewAdDialog` (ajouté le
+    2026-08-01 : présente MosaicView, une autre application de bureau de
+    l'utilisateur, à la demande explicite de celui-ci - deux logos
+    `config.get_mosaicview_logo_path()`/`get_mosaicview_exe_icon_path()`
+    redimensionnés à 96x96, un titre, une description reprenant le contenu
+    réel de la landing page du projet (jamais inventée), puis pour chacun des
+    deux liens une légende traduite - "Page de présentation"/"Téléchargement"
+    - suivie de l'URL elle-même affichée en clair comme texte du bouton
+    cliquable, plutôt qu'un libellé générique masquant l'URL réelle, à la
+    demande explicite de l'utilisateur). Tous ces dialogues utilisent un
     `QPushButton`/`QDialogButtonBox.addButton(tr(...), <Role>)` construit à la
     main pour chacun de leurs boutons (Fermer/OK/Annuler/Sauvegarder/Réinitialiser),
     traduit via `tr()`, plutôt que les rôles standard `QDialogButtonBox.Ok`/
@@ -1509,14 +1581,19 @@ sauvegarde JSON et/ou export PDF.
     `MainWindow` propose aussi, à droite du copyright, les liens « Code
     source » (`update_checker.repo_page_url()`), « Téléchargement »
     (`update_checker.releases_page_url()`, déjà utilisé par le bandeau de mise
-    à jour), « Changelog » et, ajouté le 2026-07-22, « Page web »
-    (`update_checker.project_site_url()`, vers la landing page du projet),
-    ouverts via `webbrowser.open()`. Comme tout texte affiché,
-    `project_site_link_button` est réappliqué dans `_retranslate_ui()` au
-    changement de langue à chaud : un bouton ajouté au footer sans y être
-    ajouté resterait figé dans la langue de sa création (bug corrigé le
-    2026-07-22 lors de l'ajout de ce lien, avant d'être remarqué par
-    l'utilisateur).
+    à jour), « Changelog », « Page web » (`update_checker.project_site_url()`,
+    vers la landing page du projet, ajouté le 2026-07-22) et, ajouté le
+    2026-08-01, « Publicité éhontée » (`_on_show_mosaicview_ad()`, ouvre
+    `MosaicViewAdDialog` décrit plus haut) - les quatre premiers ouverts
+    directement via `webbrowser.open()`, le dernier via une fenêtre modale.
+    Comme tout texte affiché, chaque bouton de ce footer doit être réappliqué
+    dans `_retranslate_ui()` au changement de langue à chaud : un bouton
+    ajouté au footer sans y être ajouté reste figé dans la langue de sa
+    création (bug constaté une première fois le 2026-07-22 sur
+    `project_site_link_button`, puis à nouveau le 2026-08-01 sur
+    `mosaicview_ad_button` lors de son ajout - même oubli reproduit deux fois
+    de suite sur un nouveau bouton de ce même footer, à surveiller
+    particulièrement pour tout futur ajout).
     `PendingResumesDialog` (appelé par `_offer_pending_resumes()`, invoqué
     depuis `main.py` juste après `window.show()` - et non depuis
     `MainWindow.__init__()` - pour que la fenêtre principale soit déjà visible
@@ -1536,10 +1613,13 @@ sauvegarde JSON et/ou export PDF.
     `_on_delete_clicked()` revérifient de plus le verrou de façon synchrone
     au clic (le timer peut ne pas avoir encore relevé un verrou tout juste
     posé). Ce marquage n'est qu'une aide visuelle : la vraie protection est
-    le verrou pris dans `SummarizeWorker.run()` (voir `app/instance_lock.py`),
-    qui couvre aussi le chemin sans dialogue (livre redéposé à la main puis
-    "Résumer") et la fenêtre de temps entre la sélection ici et le clic sur
-    "Résumer". Le focus par défaut est
+    le verrou (voir `app/instance_lock.py`), pris soit par
+    `SummarizeWorker.run()` (livre redéposé à la main puis "Résumer" direct,
+    sans passer par ce dialogue), soit dès la sélection elle-même via
+    `MainWindow._lock_selected_resume_state()` (depuis le 2026-08-01, voir le
+    paragraphe dédié plus haut sur le verrou par livre) - il n'existe donc
+    plus, contrairement à avant cette date, de fenêtre de temps non protégée
+    entre la sélection ici et le clic sur "Résumer". Le focus par défaut est
     explicitement placé sur "Fermer" (`setFocus()` + `setAutoDefault(False)`
     sur les trois boutons) plutôt que de laisser Qt le donner par défaut au
     premier bouton focusable de la ligne, qui est "Supprimer" : un appui
@@ -1561,6 +1641,24 @@ sauvegarde JSON et/ou export PDF.
     repartir de zéro depuis ce point ; le seul moyen de repartir de zéro est
     désormais de supprimer l'état de reprise via le bouton "Supprimer" de
     `PendingResumesDialog` avant de relancer "Résumer").
+    Jusqu'au 2026-07-31, `PendingResumesDialog` n'était accessible qu'une
+    fois, au démarrage (`_offer_pending_resumes()` appelée depuis
+    `main.py`) : refuser d'y donner suite ("Fermer") ne laissait alors plus
+    aucun moyen d'y revenir avant de relancer l'application. Depuis le
+    2026-08-01, `pending_resumes_button` (placé dans `action_row`, à côté de
+    "Résumer", `stretch=0` avec `QSizePolicy.Maximum` pour ne pas s'étirer
+    contrairement à "Résumer" en `stretch=1`) rouvre `_offer_pending_resumes()`
+    à tout moment de la session. Actif seulement s'il existe au moins un état
+    de reprise non verrouillé ailleurs (`_refresh_pending_resumes_button()`) :
+    si tous les livres en attente sont actuellement verrouillés dans une
+    autre instance, le dialogue n'offrirait aucune action possible (ni
+    reprendre, ni supprimer), donc autant griser le bouton plutôt que
+    l'ouvrir pour rien. Ce rafraîchissement est déclenché sans délai à
+    chaque changement local (sélection/retrait d'un livre dans cette même
+    fenêtre) et par le message `"resumes_changed"` reçu d'une autre instance
+    (voir le paragraphe dédié au canal `QLocalServer`/`QLocalSocket` plus
+    haut) ; le `QTimer` de secours à 15 s ne couvre plus que le cas d'une
+    instance injoignable au moment de cette diffusion.
   - **Édition et round-trip du texte** (point sensible, voir bug corrigé le
     2026-07-19) : le texte stocké utilise une ligne = un paragraphe ou un
     titre `#`/`##`/`###`. Pour l'affichage, `_to_display_markdown()` insère

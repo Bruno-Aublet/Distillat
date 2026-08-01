@@ -70,6 +70,12 @@ class BookReport:
     # contenu légitime, mais jamais persisté (ni JSON, ni export PDF) car il
     # ne fait pas partie du contenu validé de la fiche.
     extra_generated_text: str = ""
+    # Noms (traduits, ceux des onglets) des champs que Gemini a renvoyés vides
+    # lors de cette génération (ex: "Personnages", "Analyse") : affiché une
+    # seule fois en avertissement juste après la génération (voir
+    # main_window._on_finished_ok), jamais persisté ni rechargé, puisque la
+    # fiche elle-même (vide ou complétée depuis) fait foi une fois sauvegardée.
+    missing_fields: list[str] = field(default_factory=list)
 
     def to_json(self) -> str:
         data = {

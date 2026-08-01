@@ -7,7 +7,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('LICENSE', '.'), ('CHANGELOG.md', '.'), ('icons/open-book_4681875.png', 'icons'), ('locales', 'locales'), ('assets/success.wav', 'assets'), ('Fiches', 'Fiches')]
+    datas=[('LICENSE', '.'), ('CHANGELOG.md', '.'), ('icons/open-book_4681875.png', 'icons'), ('icons/MosaicView.png', 'icons'), ('icons/MosaicView_exe.png', 'icons'), ('locales', 'locales'), ('assets/success.wav', 'assets'), ('Fiches', 'Fiches')]
     + collect_data_files('tzdata'),
     hiddenimports=[
         'google.genai',

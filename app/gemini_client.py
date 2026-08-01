@@ -1386,13 +1386,20 @@ def _missing_full_report_fields(
 
 def _parse_full_report_json(
     raw_text: str, context_label: str = "full_report", finish_reason: str | None = None
-) -> tuple[str, str, list[Character], str, str]:
+) -> tuple[str, str, list[Character], str, str, list[str]]:
     """Parse la réponse combinée résumé + personnages + analyse. Le 4e élément
     retourné est le texte ignoré après le premier objet JSON (vide la plupart
-    du temps). context_label distingue, dans le log de diagnostic en cas
-    d'échec, l'appel "rapport complet" (livre tenant en une requête) de
-    l'appel "consolidation" (dernière requête d'un livre découpé en lots) :
-    même fonction de parsing, deux contextes d'appel différents."""
+    du temps), le 5e la liste des champs (traduits) que Gemini a renvoyés
+    vides, à charge de l'appelant de la traiter (avertir sans bloquer
+    l'affichage, voir generate_book_report) plutôt que de faire échouer toute
+    la génération pour un champ manquant parmi d'autres : décision révisée le
+    2026-08-01, l'utilisateur perdait alors des champs valides (ex : résumé et
+    résumé détaillé bien générés) simplement parce que personnages/analyse
+    étaient vides, sans jamais voir la fiche partielle pourtant exploitable.
+    context_label distingue, dans le log de diagnostic en cas d'échec, l'appel
+    "rapport complet" (livre tenant en une requête) de l'appel "consolidation"
+    (dernière requête d'un livre découpé en lots) : même fonction de parsing,
+    deux contextes d'appel différents."""
     data, leftover, stripped_text, end_index = _parse_json_object(raw_text, context_label, finish_reason)
     if not isinstance(data, dict):
         # Le mode JSON natif de Gemini garantit une syntaxe JSON valide, mais
@@ -1413,9 +1420,8 @@ def _parse_full_report_json(
     missing_fields = _missing_full_report_fields(summary, detailed_summary, characters, analysis)
     if missing_fields:
         _log_unparsable_response(raw_text, context_label, ValueError(f"champ(s) vide(s) : {', '.join(missing_fields)}"))
-        raise GeminiError(tr("gemini_errors.empty_report_fields", field_names=", ".join(missing_fields)))
 
-    return summary, detailed_summary, characters, analysis, leftover
+    return summary, detailed_summary, characters, analysis, leftover, missing_fields
 
 
 def _parse_chapter_summaries_batch_json(
@@ -1553,7 +1559,7 @@ def _generate_book_report_impl(
         raw_text, finish_reason = call(
             _full_report_prompt(content, use_custom_prompts, profile_id), "full_report", estimated_input_tokens=token_count
         )
-        summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
+        summary_text, detailed_summary_text, characters, analysis_text, leftover, missing_fields = _parse_full_report_json(
             raw_text, finish_reason=finish_reason
         )
         if leftover:
@@ -1588,7 +1594,7 @@ def _generate_book_report_impl(
             raw_text, finish_reason = call(
                 _full_report_prompt(content, use_custom_prompts, profile_id), "full_report", estimated_input_tokens=token_count
             )
-            summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
+            summary_text, detailed_summary_text, characters, analysis_text, leftover, missing_fields = _parse_full_report_json(
                 raw_text, finish_reason=finish_reason
             )
             if leftover:
@@ -1607,6 +1613,7 @@ def _generate_book_report_impl(
                 cover_image=content.cover_image,
                 was_split=was_split,
                 chapter_count=chapter_count,
+                missing_fields=missing_fields,
             )
 
         _log_api_call(
@@ -1664,7 +1671,7 @@ def _generate_book_report_impl(
                 "consolidation",
                 estimated_input_tokens=count_tokens(consolidation_prompt, "consolidation", model=model),
             )
-            summary_text, detailed_summary_text, characters, analysis_text, leftover = _parse_full_report_json(
+            summary_text, detailed_summary_text, characters, analysis_text, leftover, missing_fields = _parse_full_report_json(
                 raw_text, "consolidation", finish_reason=finish_reason
             )
         except GeminiError as exc:
@@ -1694,4 +1701,5 @@ def _generate_book_report_impl(
         cover_image=content.cover_image,
         was_split=was_split,
         chapter_count=chapter_count,
+        missing_fields=missing_fields,
     )

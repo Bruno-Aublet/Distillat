@@ -41,6 +41,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QTextEdit,
@@ -198,6 +199,92 @@ class ExtraTextDialog(QDialog):
         close_row = QHBoxLayout()
         close_row.addStretch()
         close_button = QPushButton(tr("extra_text_dialog.close_button"))
+        close_button.clicked.connect(self.close)
+        close_row.addWidget(close_button)
+        layout.addLayout(close_row)
+
+
+_MOSAICVIEW_SITE_URL = "https://bruno-aublet.github.io/MosaicView/"
+_MOSAICVIEW_RELEASES_URL = "https://github.com/Bruno-Aublet/MosaicView/releases/latest"
+
+
+class MosaicViewAdDialog(QDialog):
+    """Présente MosaicView, une autre application de l'utilisateur, avec un
+    lien vers sa page de présentation et un lien vers ses téléchargements."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowTitle(tr("mosaicview_ad_dialog.window_title"))
+        self.resize(420, 420)
+
+        layout = QVBoxLayout(self)
+
+        logos_row = QHBoxLayout()
+        logos_row.addStretch()
+        for icon_path in (config.get_mosaicview_logo_path(), config.get_mosaicview_exe_icon_path()):
+            logo_label = QLabel()
+            pixmap = QPixmap(str(icon_path))
+            if not pixmap.isNull():
+                logo_label.setPixmap(
+                    pixmap.scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+            logos_row.addWidget(logo_label)
+        logos_row.addStretch()
+        layout.addLayout(logos_row)
+
+        title_label = QLabel(tr("mosaicview_ad_dialog.title"))
+        title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setWordWrap(True)
+        layout.addWidget(title_label)
+
+        description_label = QLabel(tr("mosaicview_ad_dialog.description"))
+        description_label.setAlignment(Qt.AlignCenter)
+        description_label.setWordWrap(True)
+        layout.addWidget(description_label)
+
+        link_style = """
+            QPushButton {
+                color: #4a90d9;
+                border: none;
+                background: transparent;
+                text-decoration: underline;
+            }
+            QPushButton:hover {
+                color: #2a6bb0;
+            }
+            """
+
+        layout.addSpacing(24)
+
+        site_caption = QLabel(tr("mosaicview_ad_dialog.site_link_caption"))
+        site_caption.setAlignment(Qt.AlignCenter)
+        layout.addWidget(site_caption)
+
+        site_button = QPushButton(_MOSAICVIEW_SITE_URL)
+        site_button.setCursor(Qt.PointingHandCursor)
+        site_button.setStyleSheet(link_style)
+        site_button.clicked.connect(lambda: webbrowser.open(_MOSAICVIEW_SITE_URL))
+        layout.addWidget(site_button, alignment=Qt.AlignCenter)
+
+        layout.addSpacing(12)
+
+        releases_caption = QLabel(tr("mosaicview_ad_dialog.releases_link_caption"))
+        releases_caption.setAlignment(Qt.AlignCenter)
+        layout.addWidget(releases_caption)
+
+        releases_button = QPushButton(_MOSAICVIEW_RELEASES_URL)
+        releases_button.setCursor(Qt.PointingHandCursor)
+        releases_button.setStyleSheet(link_style)
+        releases_button.clicked.connect(lambda: webbrowser.open(_MOSAICVIEW_RELEASES_URL))
+        layout.addWidget(releases_button, alignment=Qt.AlignCenter)
+
+        layout.addStretch()
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close_button = QPushButton(tr("mosaicview_ad_dialog.close_button"))
         close_button.clicked.connect(self.close)
         close_row.addWidget(close_button)
         layout.addLayout(close_row)
@@ -1253,6 +1340,14 @@ class MainWindow(QMainWindow):
         self._size_to_available_screen()
 
         self.selected_book_path: str | None = None
+        # Hash du livre en attente de reprise dont cette instance detient le
+        # verrou par simple selection (avant meme de cliquer "Resumer"), pour
+        # qu'une autre instance le voie deja verrouille des cet instant
+        # plutot que seulement au demarrage effectif de la generation (voir
+        # _lock_selected_resume_state()/_release_selected_resume_lock() et
+        # SummarizeWorker.acquire_book_lock() pour le verrou pris ensuite par
+        # le worker lui-meme, sans conflit puisque meme PID).
+        self._selection_locked_book_hash: str | None = None
         self.worker: SummarizeWorker | None = None
         self.last_result: BookReport | None = None
         self._last_result_source_stem: str | None = None
@@ -1418,6 +1513,7 @@ class MainWindow(QMainWindow):
             self.file_label.setText(tr("main_window.no_file_selected"))
         self.remove_file_button.setText(tr("main_window.remove_file_button"))
         self.summarize_button.setText(tr("main_window.summarize_button"))
+        self.pending_resumes_button.setText(tr("main_window.pending_resumes_button"))
         self.quota_help_button.setToolTip(tr("quota_help_dialog.tooltip"))
         self.extra_text_label.setText(tr("main_window.extra_text_label"))
         self.quota_disclaimer_label.setText(tr("main_window.quota_disclaimer"))
@@ -1430,6 +1526,7 @@ class MainWindow(QMainWindow):
         self.download_link_button.setText(tr("main_window.download_link"))
         self.changelog_link_button.setText(tr("main_window.changelog_link"))
         self.project_site_link_button.setText(tr("main_window.project_site_link"))
+        self.mosaicview_ad_button.setText(tr("main_window.mosaicview_ad_link"))
         if not self.last_result:
             self.cover_label.setText(tr("main_window.no_cover"))
         self.summary_view.setPlaceholderText(tr("main_window.summary_placeholder"))
@@ -1550,9 +1647,33 @@ class MainWindow(QMainWindow):
         self.summarize_button = QPushButton(tr("main_window.summarize_button"))
         self.summarize_button.setMinimumHeight(36)
         self.summarize_button.clicked.connect(self._on_summarize_clicked)
-        action_row.addWidget(self.summarize_button)
+        action_row.addWidget(self.summarize_button, stretch=1)
         self._set_summarize_button_enabled(False)
+        self.pending_resumes_button = QPushButton(tr("main_window.pending_resumes_button"))
+        self.pending_resumes_button.setMinimumHeight(36)
+        self.pending_resumes_button.clicked.connect(self._offer_pending_resumes)
+        self.pending_resumes_button.setEnabled(False)
+        self.pending_resumes_button.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        action_row.addWidget(self.pending_resumes_button, stretch=0)
         layout.addLayout(action_row)
+
+        # Grise/degrise pending_resumes_button en direct. Le chemin normal
+        # est instantane, sans aucun polling : un changement local
+        # (selection/retrait d'un livre dans cette fenetre) appelle
+        # directement _refresh_pending_resumes_button(), et diffuse aussitot
+        # "resumes_changed" a toutes les autres fenetres vivantes via le
+        # canal QLocalServer/QLocalSocket existant (voir
+        # _broadcast_resumes_changed(), recu par _on_instance_message()), qui
+        # se rafraichissent alors elles aussi sans delai. Ce timer n'est
+        # qu'un filet de secours a bas cout pour l'unique cas non couvert par
+        # ce canal : une instance injoignable au moment de la diffusion (ex.
+        # plantee sans avoir pu se desinscrire) qui redevient consultable
+        # plus tard (verrou orphelin demasque par instance_lock).
+        self._pending_resumes_button_timer = QTimer(self)
+        self._pending_resumes_button_timer.setInterval(15000)
+        self._pending_resumes_button_timer.timeout.connect(self._refresh_pending_resumes_button)
+        self._pending_resumes_button_timer.start()
+        self._refresh_pending_resumes_button()
 
         status_row = QHBoxLayout()
 
@@ -1691,6 +1812,12 @@ class MainWindow(QMainWindow):
         self.project_site_link_button.setStyleSheet(footer_link_style)
         self.project_site_link_button.clicked.connect(self._on_open_project_site)
         footer_row.addWidget(self.project_site_link_button)
+
+        self.mosaicview_ad_button = QPushButton(tr("main_window.mosaicview_ad_link"))
+        self.mosaicview_ad_button.setCursor(Qt.PointingHandCursor)
+        self.mosaicview_ad_button.setStyleSheet(footer_link_style)
+        self.mosaicview_ad_button.clicked.connect(self._on_show_mosaicview_ad)
+        footer_row.addWidget(self.mosaicview_ad_button)
 
         layout.addLayout(footer_row)
 
@@ -2007,6 +2134,8 @@ class MainWindow(QMainWindow):
             self.new_instance_button.setEnabled(False)
         elif message == "ready":
             self.new_instance_button.setEnabled(True)
+        elif message == "resumes_changed":
+            self._refresh_pending_resumes_button()
 
     def _send_instance_message(self, pid: int, message: str) -> None:
         """Envoie un message ("starting" ou "ready") au canal de l'instance
@@ -2041,6 +2170,19 @@ class MainWindow(QMainWindow):
             if pid == os.getpid():
                 continue
             self._send_instance_message(pid, "starting")
+
+    def _broadcast_resumes_changed(self) -> None:
+        """Previent instantanement toutes les autres fenetres vivantes qu'un
+        etat de reprise en attente vient potentiellement de se
+        verrouiller/deverrouiller ici (selection ou retrait d'un livre en
+        attente), pour qu'elles rafraichissent leur pending_resumes_button
+        sans attendre le timer de secours (voir _pending_resumes_button_timer,
+        qui ne couvre plus que le cas d'une instance injoignable, ex. crash
+        sans notification)."""
+        for pid in instance_lock.list_alive_instance_pids():
+            if pid == os.getpid():
+                continue
+            self._send_instance_message(pid, "resumes_changed")
 
     def _announce_ready_to_all_instances(self) -> None:
         """Diffuse "ready" à toutes les fenêtres vivantes, pour qu'elles
@@ -2133,6 +2275,9 @@ class MainWindow(QMainWindow):
     def _on_open_project_site(self) -> None:
         webbrowser.open(project_site_url())
 
+    def _on_show_mosaicview_ad(self) -> None:
+        MosaicViewAdDialog(self).exec_()
+
     def show_update_banner(self, latest_version: str) -> None:
         self._latest_version_available = latest_version
         self.update_banner_label.setText(tr("main_window.update_banner", version=latest_version))
@@ -2160,9 +2305,34 @@ class MainWindow(QMainWindow):
         else:
             self.summarize_button.setStyleSheet("")
 
+    def _release_selection_lock(self) -> None:
+        """Relache le verrou de livre pris par simple selection (voir
+        _selection_locked_book_hash), sans effet si aucun n'est detenu."""
+        if self._selection_locked_book_hash is not None:
+            instance_lock.release_book_lock(self._selection_locked_book_hash)
+            self._selection_locked_book_hash = None
+            self._broadcast_resumes_changed()
+
+    def _lock_selected_resume_state(self, path: str) -> None:
+        """Prend immediatement le verrou de livre du fichier selectionne s'il
+        correspond a un etat de reprise en attente (rien a faire sinon : pour
+        un livre neuf, le hash n'est connu qu'apres extraction par
+        SummarizeWorker, qui prend alors lui-meme son propre verrou). Rend
+        aussitot ce livre visible comme verrouille dans les autres instances,
+        au lieu d'attendre le clic sur "Resumer"."""
+        self._release_selection_lock()
+        resume_state = self._find_resume_state_for(path)
+        if resume_state is None:
+            return
+        if instance_lock.acquire_book_lock(resume_state.book_hash):
+            self._selection_locked_book_hash = resume_state.book_hash
+            self._broadcast_resumes_changed()
+        self._refresh_pending_resumes_button()
+
     def _on_file_selected(self, path: str) -> None:
         if not self._confirm_discard_unsaved_report():
             return
+        self._lock_selected_resume_state(path)
         self.selected_book_path = path
         self.file_label.setText(tr("main_window.file_selected", filename=os.path.basename(path)))
         self.remove_file_button.show()
@@ -2181,6 +2351,8 @@ class MainWindow(QMainWindow):
     def _on_remove_file_clicked(self) -> None:
         if not self._confirm_discard_unsaved_report():
             return
+        self._release_selection_lock()
+        self._refresh_pending_resumes_button()
         self.selected_book_path = None
         self.file_label.setText(tr("main_window.no_file_selected"))
         self.remove_file_button.hide()
@@ -2356,6 +2528,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self._confirm_discard_unsaved_report():
+            self._release_selection_lock()
             if self.active_profile is not None:
                 instance_lock.release_profile_lock(self.active_profile["id"])
             instance_lock.unregister_instance()
@@ -2367,6 +2540,7 @@ class MainWindow(QMainWindow):
     def _offer_pending_resumes(self) -> None:
         states = generation_resume.load_all_resume_states(config.get_settings_dir())
         if not states:
+            self._refresh_pending_resumes_button()
             return
 
         dialog = PendingResumesDialog(states, self)
@@ -2377,6 +2551,21 @@ class MainWindow(QMainWindow):
 
         if accepted and dialog.selected_state is not None:
             self._on_file_selected(dialog.selected_state.book_path)
+
+        self._refresh_pending_resumes_button()
+
+    def _refresh_pending_resumes_button(self) -> None:
+        """Actif seulement s'il existe au moins un livre en attente de
+        reprise non verrouille par une autre instance (voir
+        instance_lock.is_book_locked_elsewhere(), lecture seule) : si tous
+        les livres en attente sont actuellement traites ailleurs, le dialogue
+        n'offrirait aucune action possible (ni reprendre, ni supprimer), donc
+        autant griser le bouton plutot que de l'ouvrir pour rien."""
+        states = generation_resume.load_all_resume_states(config.get_settings_dir())
+        any_actionable = any(
+            not instance_lock.is_book_locked_elsewhere(state.book_hash) for state in states
+        )
+        self.pending_resumes_button.setEnabled(any_actionable)
 
     def _find_resume_state_for(self, book_path: str | None) -> generation_resume.ResumeState | None:
         if not book_path:
@@ -2462,6 +2651,12 @@ class MainWindow(QMainWindow):
         self.worker.quota_updated.connect(self._update_quota_display)
         self.worker.finished_ok.connect(self._on_finished_ok)
         self.worker.failed.connect(self._on_failed)
+        # Relache le verrou de simple selection juste avant de lancer le
+        # worker : celui-ci reprend aussitot le meme verrou de son propre cote
+        # (acquire_book_lock(), meme PID -> succes immediat), donc aucune
+        # fenetre ou le livre apparaitrait deverrouille pour une autre
+        # instance entre les deux.
+        self._release_selection_lock()
         self.worker.start()
 
     @staticmethod
@@ -2671,6 +2866,18 @@ class MainWindow(QMainWindow):
         # que le contenu final s'affiche (observé bloqué visuellement sur Windows
         # après un traitement long, bien que les données soient à jour en mémoire).
         self.repaint()
+        # Avertissement affiché APRES la fiche (déjà affichée ci-dessus, même
+        # partielle) plutôt que de bloquer toute la génération pour un champ
+        # manquant parmi d'autres (revu le 2026-08-01) : l'utilisateur garde
+        # les champs valides déjà générés (ex : résumés) sous les yeux et peut
+        # choisir en connaissance de cause de les compléter à la main ou de
+        # relancer une génération à zéro pour les champs listés ci-dessous.
+        if result.missing_fields:
+            QMessageBox.warning(
+                self,
+                tr("main_window.warning_title"),
+                tr("gemini_errors.empty_report_fields", field_names=", ".join(result.missing_fields)),
+            )
 
     def _on_failed(self, error_message: str, error_kind: str | None) -> None:
         self._elapsed_timer.stop()

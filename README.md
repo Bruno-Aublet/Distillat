@@ -25,7 +25,7 @@ confidentiels.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.3.5**
+**Version 1.3.6**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
@@ -103,14 +103,19 @@ ou en ligne : ne le trouverez pas, il n'a jamais existé.
      suffit ensuite de cliquer sur **Résumer** pour reprendre sa génération.
      Le bouton **Supprimer** de cette fenêtre efface l'état de reprise d'un
      livre (pour repartir de zéro à la place) ; le fichier correspondant est
-     envoyé à la corbeille Windows plutôt que supprimé sans recours.
+     envoyé à la corbeille Windows plutôt que supprimé sans recours. Cette
+     même fenêtre reste accessible à tout moment en cours de session via le
+     bouton **Reprises en attente** situé à côté de **Résumer** (grisé s'il
+     n'existe aucun livre en attente, ou si tous les livres en attente sont
+     déjà en cours de traitement ailleurs).
      Si plusieurs fenêtres de Distillat sont ouvertes en parallèle, un même
      livre ne peut être généré ou repris que dans une seule fenêtre à la
-     fois : cette fenêtre de reprise indique en direct les livres déjà en
-     cours de génération dans une autre fenêtre (mention dédiée, entrée
-     grisée non sélectionnable), et lancer malgré tout la génération d'un
-     livre déjà traité ailleurs est refusé avec un message explicite, sans
-     consommer de quota.
+     fois, dès sa simple sélection (pas besoin de cliquer sur **Résumer**) :
+     cette fenêtre de reprise indique en direct les livres déjà sélectionnés
+     ou en cours de génération dans une autre fenêtre (mention dédiée,
+     entrée grisée non sélectionnable), et lancer malgré tout la génération
+     d'un livre déjà traité ailleurs est refusé avec un message explicite,
+     sans consommer de quota.
 4. Un petit son discret est joué dès que la fiche s'affiche avec succès. Le
    résultat (toujours dans la langue actuellement choisie pour
    l'interface, quelle que soit la langue du livre - voir
@@ -402,7 +407,7 @@ its services - avoid submitting sensitive or confidential documents.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
 `.zip` file to download is at the bottom of the release page).
 
-**Version 1.3.5**
+**Version 1.3.6**
 
 Windows application with a PyQt5 interface to generate a complete reading
 report (summaries, characters, analysis) from an EPUB or PDF book, via the
@@ -470,14 +475,23 @@ online: you won't find it, it never existed.
      **Summarize** again offers to resume exactly where processing had
      stopped, without redoing what was already obtained. One or more books
      can remain waiting to be resumed this way; on startup, if that is the
-     case, a window lists all of them and lets you resume one directly,
-     without having to find and drop the file again yourself.
+     case, a window lists all of them and lets you resume one directly
+     (**Resume selection** button), without having to find and drop the file
+     again yourself. The **Delete** button in this window clears a book's
+     resume state (to start over instead); the corresponding file is sent to
+     the Windows Recycle Bin rather than permanently deleted. This same
+     window stays reachable at any time during the session via the
+     **Pending resumes** button next to **Summarize** (grayed out if there
+     is no book waiting, or if every waiting book is already being processed
+     elsewhere).
      If several Distillat windows are open in parallel, a given book can
-     only be generated or resumed in one window at a time: the resume window
-     shows live which books are already being generated in another window
-     (dedicated mention, grayed-out non-selectable entry), and starting the
-     generation of a book already being processed elsewhere anyway is
-     refused with an explicit message, without consuming any quota.
+     only be generated or resumed in one window at a time, from the moment
+     it is selected (no need to click **Summarize**): the resume window
+     shows live which books are already selected or being generated in
+     another window (dedicated mention, grayed-out non-selectable entry),
+     and starting the generation of a book already being processed
+     elsewhere anyway is refused with an explicit message, without consuming
+     any quota.
 4. A short, discreet sound plays as soon as the report is displayed
    successfully. The result (always in the language currently chosen for the interface,
    regardless of the book's language - see

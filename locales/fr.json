@@ -39,7 +39,7 @@
     "truncated_response": "Réponse de Gemini interrompue en cours de génération car trop longue (limite de longueur du modèle atteinte) : le contenu reçu est incomplet et inexploitable.",
     "unexpected_response_shape": "La réponse de Gemini n'a pas la forme attendue (racine JSON non exploitable).",
     "incomplete_first_json_object": "Gemini a produit une réponse incomplète (personnages et/ou analyse manquants) suivie d'une seconde tentative plus complète dans la même réponse : pour éviter une fiche incomplète, cette génération est annulée. Recliquez sur Résumer pour réessayer.",
-    "empty_report_fields": "Gemini n'a pas produit de contenu pour : {field_names}. Cela arrive parfois : Gemini ne respecte pas toujours les consignes demandées. Vérifiez visuellement ce qui a été généré, mais il n'y a normalement rien à récupérer ici puisque la réponse elle-même est incomplète : mieux vaut recliquer sur Résumer pour relancer une génération à zéro."
+    "empty_report_fields": "Gemini n'a pas produit de contenu pour : {field_names}. Ces onglets sont donc restés vides, mais le reste de la fiche a bien été généré et est affiché. Cela arrive parfois : Gemini ne respecte pas toujours les consignes demandées. Vous pouvez compléter les champs manquants à la main, ou recliquer sur Résumer pour relancer une génération à zéro."
   },
   "gemini_progress": {
     "counting_tokens": "Comptage des tokens du texte extrait…",
@@ -74,6 +74,14 @@
   "extra_text_dialog": {
     "window_title": "Contenu supplémentaire ignoré",
     "explanation": "Gemini a produit ce texte en plus du contenu utilisé pour la fiche. Il peut s'agir d'une répétition sans intérêt ou de contenu légitime : vérifiez-le et copiez-collez ce qui vous semble utile.",
+    "close_button": "Fermer"
+  },
+  "mosaicview_ad_dialog": {
+    "window_title": "Publicité éhontée",
+    "title": "Connaissez-vous MosaicView ?",
+    "description": "MosaicView est un éditeur de bandes dessinées numériques du même auteur, gratuit et open source (Windows 10/11) : il affiche toutes les pages d'une ou deux archives en mosaïque côte à côte, permet de les retoucher (luminosité, contraste, sépia, noir & blanc, redressement, suppression de logos/filigranes via Clone Zone, rotation, recadrage, ajout de texte, GIF animés), de récupérer automatiquement les métadonnées via ComicVine, de convertir par lot CBR/CB7/PDF vers CBZ, et propose un historique annuler/refaire complet sur toute opération.",
+    "site_link_caption": "Page de présentation :",
+    "releases_link_caption": "Téléchargement :",
     "close_button": "Fermer"
   },
   "quota_help_dialog": {
@@ -204,6 +212,7 @@
     "file_selected": "Fichier sélectionné : {filename}",
     "remove_file_button": "✕ Retirer",
     "summarize_button": "Résumer",
+    "pending_resumes_button": "Reprises en attente",
     "extra_text_label": "<a href=\"#\">ℹ️ Du contenu supplémentaire généré par Gemini a été ignoré, cliquez pour le consulter</a>",
     "quota_disclaimer": "Ces compteurs sont des estimations locales à cette application. Ils seront faussés si la même clé API est aussi utilisée ailleurs en parallèle.",
     "load_report_button": "Charger une fiche",
@@ -215,6 +224,7 @@
     "download_link": "Téléchargement",
     "changelog_link": "Changelog",
     "project_site_link": "Page web",
+    "mosaicview_ad_link": "Publicité éhontée",
     "no_cover": "Pas de couverture",
     "set_cover_action": "Définir la couverture...",
     "set_cover_dialog_title": "Choisir une image de couverture",
@@ -252,6 +262,7 @@
     "resume_wait_hint_other": "Ce n'est pas un problème de quota, il s'agit probablement d'un aléa ponctuel de génération. Vous pouvez réessayer tout de suite, ",
     "resume_hint_suffix": "\n\nRien n'est perdu : les {batches_done}/{batches_total} lot(s) de chapitres déjà résumés avec succès ont été sauvegardés. {wait_hint}glissez-déposez à nouveau ce même fichier EPUB/PDF et cliquez sur \"Résumer\" : Distillat reconnaîtra automatiquement où le traitement s'était arrêté et proposera de reprendre exactement à partir de là, sans refaire le travail déjà fait.",
     "error_title": "Erreur",
+    "warning_title": "Avertissement",
     "book_locked_title": "Génération déjà en cours",
     "save_pdf_dialog_title": "Enregistrer le résumé",
     "save_pdf_filter": "Documents PDF (*.pdf)",
