@@ -32,7 +32,7 @@
     "invalid_api_key": "The Gemini API key is invalid, expired, or lacks the necessary permissions. Check it via the API key button. (error 401/403)",
     "error_code": "error {code}",
     "generic_api_error": "An error occurred while communicating with the Gemini API{status_part}: {error}",
-    "blocked_by_safety_filters": "Gemini did not produce a usable response, likely blocked by its safety filters (book content flagged as sensitive). A new attempt is not possible for this request.",
+    "blocked_by_safety_filters": "Gemini blocked this request because of its safety filters (content flagged as sensitive in the passage concerned). This is not a temporary glitch: clicking Summarize again will give the same result on this same passage, and there is no way to bypass this block from within Distillat.",
     "empty_response": "Empty response received from the Gemini API.",
     "invalid_prompt_placeholder": "The custom prompt \"{prompt_label}\" contains an error: the placeholder {error} is not recognized. Check its spelling in the Prompts window (\"Reset this prompt\" button if needed).",
     "unreadable_response": "Unreadable response from Gemini (unexpected format): {error}",

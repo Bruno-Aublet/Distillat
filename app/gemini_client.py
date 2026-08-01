@@ -73,10 +73,11 @@ QuotaCallback = Callable[[QuotaSnapshot], None]
 
 class GeminiError(Exception):
     """error_kind identifie la nature de l'erreur indépendamment de la langue
-    du message ("daily_quota", "rate_quota", ou None pour tout autre cas) :
-    l'appelant (main_window) s'appuie dessus pour adapter son comportement
-    (ex : proposer une reprise), sans jamais chercher un mot-clé dans le
-    message traduit, ce qui casserait selon la langue de l'UI."""
+    du message ("daily_quota", "rate_quota", "content_blocked", ou None pour
+    tout autre cas) : l'appelant (main_window) s'appuie dessus pour adapter
+    son comportement (ex : proposer une reprise), sans jamais chercher un
+    mot-clé dans le message traduit, ce qui casserait selon la langue de
+    l'UI."""
 
     def __init__(self, message: str, error_kind: str | None = None) -> None:
         super().__init__(message)
@@ -478,10 +479,45 @@ def _call_gemini(
             # une consolidation, diagnostiqué a posteriori uniquement grâce au
             # fichier de log brut gemini_unparsable_*.txt).
             finish_reason = response.candidates[0].finish_reason if response.candidates else None
+            # finish_message accompagne parfois finish_reason d'un texte
+            # explicatif (ex. détail d'un arrêt anormal) : jamais lu jusqu'ici.
+            finish_message = response.candidates[0].finish_message if response.candidates else None
+            # prompt_feedback porte la cause d'un blocage décidé AVANT toute
+            # génération (ex. block_reason="SAFETY" avec le détail des
+            # safety_ratings), donc sans aucun candidat ni finish_reason
+            # associé : un cas resté invisible jusqu'au 2026-08-01
+            # (finish_reason=None sans autre info journalisée, alors que
+            # response.prompt_feedback n'était jamais consulté).
+            prompt_feedback = getattr(response, "prompt_feedback", None)
+            # safety_ratings du candidat (distinct de ceux de prompt_feedback,
+            # qui évaluent le prompt d'entrée) : évaluations de sécurité sur
+            # la réponse déjà produite, utiles si un candidat existe mais est
+            # jugé dangereux a posteriori (contrairement au cas du
+            # 2026-08-01, où aucun candidat n'était présent).
+            safety_ratings = response.candidates[0].safety_ratings if response.candidates else None
+            # thoughts_token_count : tokens de "raisonnement" interne du
+            # modèle, non renvoyés en texte mais bien comptés côté quota -
+            # peut expliquer un tokens_sortie=0 apparent malgré une requête
+            # réellement coûteuse pour Google.
+            thoughts_tokens = getattr(usage, "thoughts_token_count", None) or 0
+            # traffic_type : type de trafic facturé par Google pour cet appel
+            # (attendu constant sur le palier gratuit utilisé par Distillat) -
+            # journalisé par précaution, pour détecter tout de suite si un
+            # appel basculait un jour de façon inattendue sur un autre palier.
+            traffic_type = getattr(usage, "traffic_type", None)
+            # model_version/response_id : identifiants renvoyés par l'API,
+            # utiles en cas d'échange avec le support Google sur un appel
+            # précis, sans usage interne au code.
+            model_version = getattr(response, "model_version", None)
+            response_id = getattr(response, "response_id", None)
             _log_api_call(
                 f"generate_content OK contexte={context_label} tokens_entree={input_tokens} "
-                f"tokens_sortie={output_tokens} duree={time.monotonic() - start:.1f}s "
-                f"requetes_jour={snapshot.requests_today} finish_reason={finish_reason}"
+                f"tokens_sortie={output_tokens} tokens_reflexion={thoughts_tokens} "
+                f"duree={time.monotonic() - start:.1f}s "
+                f"requetes_jour={snapshot.requests_today} finish_reason={finish_reason} "
+                f"finish_message={finish_message} prompt_feedback={prompt_feedback} "
+                f"safety_ratings={safety_ratings} traffic_type={traffic_type} "
+                f"model_version={model_version} response_id={response_id}"
             )
             text = response.text
             if not text:
@@ -490,8 +526,23 @@ def _call_gemini(
                 # retourné, notamment si les filtres de sécurité de Gemini
                 # ont bloqué la réponse : sans ce cas, l'utilisateur voyait
                 # un message technique brut au lieu d'une explication.
+                # block_reason (constaté le 2026-08-01, PROHIBITED_CONTENT) :
+                # blocage décidé par Gemini avant toute génération, donc SANS
+                # candidat ni finish_reason associé (contrairement au cas
+                # `finish_reason not in (None, "STOP")` ci-dessous, qui
+                # suppose qu'un candidat ait au moins été créé) - un nouveau
+                # blocage retenterait indéfiniment le même échec sur le même
+                # contenu, error_kind="content_blocked" l'indique à
+                # l'appelant (main_window) pour ne pas proposer de reprise.
+                block_reason = getattr(prompt_feedback, "block_reason", None) if prompt_feedback else None
+                if block_reason:
+                    raise GeminiError(
+                        tr("gemini_errors.blocked_by_safety_filters"), error_kind="content_blocked"
+                    )
                 if finish_reason not in (None, "STOP"):
-                    raise GeminiError(tr("gemini_errors.blocked_by_safety_filters"))
+                    raise GeminiError(
+                        tr("gemini_errors.blocked_by_safety_filters"), error_kind="content_blocked"
+                    )
                 raise GeminiError(tr("gemini_errors.empty_response"))
             return text, finish_reason
         except genai_errors.APIError as exc:
@@ -548,7 +599,10 @@ nombre. Pour chaque personnage, rédige une description couvrant son rôle, sa p
 objectifs et son influence sur les événements.
 4. Une ANALYSE littéraire d'au moins 2500 à 4000 mots, structurée en plusieurs paragraphes distincts \
 couvrant les thèmes principaux, le style d'écriture et la construction narrative, puis la portée \
-de l'œuvre - développée et argumentée, sans répéter le contenu déjà couvert par les résumés.
+de l'œuvre - développée et argumentée, sans répéter le contenu déjà couvert par les résumés. Chaque \
+titre de section doit être seul sur sa ligne et commencer par "## " (par exemple "## Les thèmes \
+principaux"), ou "### " pour un sous-titre ; n'utilise aucune autre mise en forme Markdown dans le \
+texte.
 
 Réponds STRICTEMENT avec un objet JSON valide, sans aucun texte avant ou après, ni fences \
 markdown, au format exact. Les quatre champs ci-dessous sont tous obligatoires : ne renvoie \
@@ -648,7 +702,10 @@ nombre. Pour chaque personnage, rédige une description couvrant son rôle, sa p
 objectifs et son influence sur les événements.
 4. Une ANALYSE littéraire d'au moins 2500 à 4000 mots, structurée en plusieurs paragraphes distincts \
 couvrant les thèmes principaux, le style d'écriture et la construction narrative, puis la portée \
-de l'œuvre - développée et argumentée, sans répéter le contenu déjà couvert par les résumés.
+de l'œuvre - développée et argumentée, sans répéter le contenu déjà couvert par les résumés. Chaque \
+titre de section doit être seul sur sa ligne et commencer par "## " (par exemple "## Les thèmes \
+principaux"), ou "### " pour un sous-titre ; n'utilise aucune autre mise en forme Markdown dans le \
+texte.
 
 Réponds STRICTEMENT avec un objet JSON valide, sans aucun texte avant ou après, ni fences \
 markdown, au format exact. Les quatre champs ci-dessous sont tous obligatoires : ne renvoie \
@@ -707,7 +764,9 @@ personality, and development; for each group or organization, describe instead i
 plot, its goals, and its influence on events.
 4. A literary ANALYSIS of at least 2500 to 4000 words, structured in several distinct paragraphs \
 covering the main themes, the writing style and narrative construction, then the work's significance \
-- developed and well-argued, without repeating content already covered by the summaries.
+- developed and well-argued, without repeating content already covered by the summaries. Each \
+section heading must stand alone on its own line and start with "## " (for example "## Main \
+themes"), or "### " for a subheading; do not use any other Markdown formatting in the text.
 
 Respond STRICTLY with a valid JSON object, with no text whatsoever before or after, no markdown \
 fences, in the exact format. All four fields below are mandatory: never return an empty \
@@ -802,7 +861,9 @@ personality, and development; for each group or organization, describe instead i
 plot, its goals, and its influence on events.
 4. A literary ANALYSIS of at least 2500 to 4000 words, structured in several distinct paragraphs \
 covering the main themes, the writing style and narrative construction, then the work's significance \
-- developed and well-argued, without repeating content already covered by the summaries.
+- developed and well-argued, without repeating content already covered by the summaries. Each \
+section heading must stand alone on its own line and start with "## " (for example "## Main \
+themes"), or "### " for a subheading; do not use any other Markdown formatting in the text.
 
 Respond STRICTLY with a valid JSON object, with no text whatsoever before or after, no markdown \
 fences, in the exact format. All four fields below are mandatory: never return an empty \

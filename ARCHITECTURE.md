@@ -764,6 +764,84 @@ sauvegarde JSON et/ou export PDF.
     (réponse coupée par la limite de longueur du modèle) au lieu du message
     générique `gemini_errors.unreadable_response` - qui reste utilisé pour
     tout échec de parsing sans cette confirmation.
+  - **`prompt_feedback` non journalisé (constaté le 2026-08-01)** : sur un lot
+    de résumés de chapitres (`chapter_summary_batch_2/2`, livre "Mortelle
+    Séduction", gemini-3.6-flash), `generate_content` a renvoyé deux fois de
+    suite (tentatives distinctes, reprise via `reprise_lots_deja_faits`) une
+    réponse avec `tokens_sortie=0` et `finish_reason=None` (donc
+    `response.candidates` vide ou sans candidat exploitable), en ~11s au lieu
+    des dizaines de secondes habituelles pour ce contexte - message affiché à
+    l'utilisateur : `gemini_errors.empty_response` (`finish_reason` valant
+    `None` ne remplit pas la condition `not in (None, "STOP")` qui déclenche
+    `blocked_by_safety_filters`, voir ci-dessus). Le journal ne contenait
+    alors aucune autre information exploitable pour comprendre la cause :
+    `response.prompt_feedback` (où l'API place la cause d'un blocage décidé
+    *avant* toute génération, ex. `block_reason` et `safety_ratings`,
+    distinct de `candidates[].finish_reason` qui suppose qu'un candidat ait
+    été produit) n'était jusqu'ici jamais consulté ni journalisé. Il est
+    désormais ajouté à la ligne `generate_content OK` d'`api_requests.log`,
+    aux côtés de `finish_reason` (`getattr(response, "prompt_feedback",
+    None)`, best-effort comme le reste du logging), dans un premier temps
+    sans changer le comportement utilisateur (le message restait
+    `empty_response`), le temps d'observer un cas réel. À cette
+    occasion, un passage en revue de tous les champs disponibles sur
+    `GenerateContentResponse`/`Candidate`/`usage_metadata` côté SDK
+    `google-genai` (au-delà de `finish_reason`/`prompt_feedback` ci-dessus) a
+    ajouté à la même ligne `generate_content OK`, toujours en lecture seule
+    (`getattr`, best-effort, aucun changement de comportement) : `finish_message`
+    (texte explicatif accompagnant parfois `finish_reason`, sur le candidat) ;
+    `safety_ratings` du candidat (évaluations de sécurité sur la réponse déjà
+    produite, distinct de celui de `prompt_feedback` qui évalue le prompt
+    d'entrée - utile si un candidat existe mais est jugé dangereux a
+    posteriori, contrairement au cas du 2026-08-01 où `candidates` était
+    vide) ; `usage.thoughts_token_count` (tokens de raisonnement interne du
+    modèle, non renvoyés en texte mais comptés côté quota, peut expliquer un
+    `tokens_sortie=0` apparent malgré une requête réellement coûteuse) ;
+    `usage.traffic_type` (type de trafic facturé par Google, journalisé par
+    précaution pour détecter un jour un basculement inattendu hors du palier
+    gratuit) ; `response.model_version`/`response.response_id` (identifiants
+    bruts de l'appel, utiles en cas d'échange avec le support Google, sans
+    usage interne au code). Les autres champs du SDK (`citation_metadata`,
+    `grounding_metadata`, `avg_logprobs`, `logprobs_result`,
+    `url_context_metadata`, tout ce qui touche au *tool use*/*context
+    caching*/aux modalités non textuelles) ont été délibérément laissés de
+    côté : soit sans rapport plausible avec un échec de génération, soit
+    couvrant des fonctionnalités que Distillat n'utilise pas, pour ne pas
+    diluer le journal (voir la contrainte de taille de
+    `_trim_api_requests_log()` plus haut).
+
+    Le cas s'est reproduit une 3e fois le jour même (toujours le même lot
+    2/2 du même livre) : `prompt_feedback` a effectivement livré la cause,
+    confirmant l'hypothèse ci-dessus - `block_reason=<BlockedReason.PROHIBITED_CONTENT:
+    'PROHIBITED_CONTENT'>`, une catégorie de blocage plus stricte que les
+    `HARM_CATEGORY_*` habituelles, non réglable via `safety_settings` côté
+    API (contrairement aux catégories à seuil ajustable) : il n'existe donc
+    aucun moyen, ni côté prompt (reformuler, préciser "c'est une fiction")
+    ni côté configuration de l'API, de faire accepter ce contenu par
+    Gemini - un nouvel essai sur ce même passage échoue nécessairement de
+    la même façon à chaque fois, ce n'est pas un aléa. `_call_gemini()` lève
+    désormais `GeminiError(tr("gemini_errors.blocked_by_safety_filters"),
+    error_kind="content_blocked")` dès que `prompt_feedback.block_reason`
+    est renseigné, en plus du cas déjà couvert (`finish_reason not in
+    (None, "STOP")` sur un candidat produit mais jugé dangereux a
+    posteriori) qui porte désormais le même `error_kind`. Le message
+    `gemini_errors.blocked_by_safety_filters` (`locales/fr.json`/`en.json`)
+    a été reformulé en conséquence : affirmatif plutôt qu'hypothétique
+    ("probablement"), et précise explicitement qu'aucun contournement
+    n'est possible depuis Distillat, pour ne plus laisser croire qu'un
+    nouvel essai pourrait suffire. `main_window._on_failed()` traite ce
+    nouvel `error_kind` comme `"book_locked"` (voir plus haut) : le
+    suffixe invitant à reprendre la génération interrompue
+    (`main_window.resume_hint_suffix`) n'est plus ajouté au message pour
+    ce cas, contradictoire avec "un nouvel essai donnera le même
+    résultat". Décision explicite de l'utilisateur : la sauvegarde de
+    l'état de reprise elle-même (`generation_resume.save_resume_state()`,
+    appelée par `worker.py` pour tout `PartialGenerationError` sans
+    distinction d'`error_kind`) n'a volontairement pas été touchée -
+    seul le message affiché change, le fichier de reprise reste créé et
+    reste consultable/déclenchable manuellement depuis "Reprises en
+    attente" si l'utilisateur le souhaite malgré tout (ex. pour retenter
+    après une modification manuelle du livre source).
   - `_normalize_dashes()` : remplace systématiquement les tirets cadratin/
     demi-cadratin produits par Gemini par un tiret simple.
   - `default_prompt_templates()` (3 clés : `full_report`, `chapter_summary`,
@@ -783,6 +861,18 @@ sauvegarde JSON et/ou export PDF.
     centralise l'appel à `.format()` pour les 3 prompts et traduit un
     `KeyError` (repère mal orthographié dans un prompt personnalisé, ex.
     `{full_textt}`) en `GeminiError` nommant le prompt et le repère en cause.
+  - **Titres de section non formatés dans l'analyse (constaté le 2026-08-01)** :
+    la consigne "chaque titre de section doit être seul sur sa ligne et
+    commencer par `## `/`### `" n'était donnée dans les 4 templates par défaut
+    que pour l'élément 2 (résumé détaillé), pas pour l'élément 4 (analyse).
+    Gemini produisait donc les titres de section de l'analyse en texte brut,
+    sans aucun préfixe Markdown : `_to_display_markdown()`/`QTextEdit.setMarkdown()`
+    (voir `app/main_window.py` ci-dessous) rendait alors chacune de ces lignes
+    comme un item de liste numérotée plutôt qu'un titre stylé, affichant "1."
+    en boucle devant chaque titre au lieu d'une hiérarchie de titres correcte.
+    La même consigne de formatage que l'élément 2 a été ajoutée à l'élément 4
+    dans les 4 templates par défaut (`DEFAULT_FULL_REPORT_PROMPT`/`_EN` et
+    `DEFAULT_CONSOLIDATION_PROMPT`/`_EN`).
   - **Arrêt prématuré sans erreur (constaté le 2026-07-22 avec gemini-3.6-flash)** :
     `DEFAULT_FULL_REPORT_PROMPT`/`_EN` et `DEFAULT_CONSOLIDATION_PROMPT`/`_EN`
     demandent 4 éléments (`summary`, `detailed_summary`, `characters`,

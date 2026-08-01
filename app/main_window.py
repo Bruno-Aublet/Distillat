@@ -2688,7 +2688,13 @@ class MainWindow(QMainWindow):
         # error_kind "book_locked" : la génération a été refusée parce qu'une
         # autre instance traite déjà ce livre - suggérer de recliquer sur
         # "Résumer" pour reprendre serait contradictoire avec ce refus.
-        if resume_state is not None and error_kind != "book_locked":
+        # error_kind "content_blocked" : Gemini a bloqué ce lot précis pour son
+        # contenu (ex. PROHIBITED_CONTENT) - un nouvel essai sur le même lot
+        # échouera de la même façon, donc pas de suggestion de reprise ici. Le
+        # fichier de reprise reste néanmoins sauvegardé comme pour tout autre
+        # échec partiel (voir worker.py) : l'utilisateur peut toujours choisir
+        # de la déclencher lui-même depuis "Reprises en attente".
+        if resume_state is not None and error_kind not in ("book_locked", "content_blocked"):
             if error_kind == "daily_quota":
                 wait_hint = tr("main_window.resume_wait_hint_daily")
             elif error_kind == "rate_quota":

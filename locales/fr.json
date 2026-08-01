@@ -32,7 +32,7 @@
     "invalid_api_key": "La clé API Gemini est invalide, expirée ou ne dispose pas des autorisations nécessaires. Vérifiez-la via le bouton Clé API. (erreur 401/403)",
     "error_code": "erreur {code}",
     "generic_api_error": "Une erreur est survenue lors de la communication avec l'API Gemini{status_part} : {error}",
-    "blocked_by_safety_filters": "Gemini n'a pas produit de réponse exploitable, probablement bloquée par ses filtres de sécurité (contenu du livre jugé sensible). Nouvelle tentative impossible pour cette requête.",
+    "blocked_by_safety_filters": "Gemini a bloqué cette requête à cause de ses filtres de sécurité (contenu jugé sensible dans le passage du livre concerné). Ce n'est pas un aléa passager : recliquer sur Résumer donnera le même résultat sur ce même passage, et il n'existe aucun moyen de contourner ce blocage depuis Distillat.",
     "empty_response": "Réponse vide reçue de l'API Gemini.",
     "invalid_prompt_placeholder": "Le prompt personnalisé « {prompt_label} » contient une erreur : le repère {error} n'est pas reconnu. Vérifiez son orthographe dans la fenêtre Prompts (bouton « Réinitialiser ce prompt » si besoin).",
     "unreadable_response": "Réponse de Gemini illisible (format inattendu) : {error}",
