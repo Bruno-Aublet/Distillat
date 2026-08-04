@@ -4,7 +4,7 @@
 
 **Le tome 8 de votre saga préférée vient de sortir, et vous mourez d'envie de
 le lire. Sauf que le tome 7, c'était il y a 4 ans, et vos souvenirs sont un
-peu flous : qui étaient déjà ces personnages secondaires ? Et il se passait
+peu flous : qui étaient ces personnages secondaires ? Et il se passait
 quoi, à la fin ?**
 
 Si cette situation vous parle, Distillat est fait pour vous. Déposez
@@ -12,8 +12,7 @@ simplement votre fichier EPUB ou PDF dans la zone prévue à cet effet : vous
 obtenez un résumé, des fiches de personnages et une analyse de l'oeuvre,
 prêts à consulter ou à exporter en PDF.
 
-L'application s'appuie sur le palier gratuit de Gemini (Flash), avec un choix
-possible entre plusieurs modèles selon le profil de clé API utilisé (voir
+L'application s'appuie sur le palier gratuit de Gemini (Flash) (voir
 [Suivi des quotas](#suivi-des-quotas)).
 
 **Confidentialité** : le texte du livre est envoyé à l'API Gemini pour générer
@@ -25,18 +24,13 @@ confidentiels.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.3.6**
+**Version 1.4.0**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
 l'API Gemini (gratuite). L'interface et la langue des fiches générées sont
 disponibles en français et en anglais (voir
 [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches)).
-
-Le numéro de version s'affiche dans le titre de la fenêtre et dans les
-propriétés Windows de l'exécutable (clic droit sur `Distillat.exe` >
-Propriétés > Détails). Source unique de vérité : `app/__version__.py`
-(synchronisé manuellement avec `version_info.txt` pour les métadonnées .exe).
 
 À chaque lancement, l'application vérifie silencieusement en arrière-plan si
 une version plus récente est disponible sur la page
@@ -47,9 +41,9 @@ vers la page de téléchargement.
 
 ## Fiche d'exemple
 
-Deux fiches d'exemple, `FICHE TEST - Les Terres Oubliées - LIVRE FICTIF.distillat.json`
+Deux fiches d'exemple, `FICHE TEST - Les Terres Oubliées - LIVRE FICTIF.dstl`
 et sa version anglaise `TEST SHEET - The Forgotten Lands - FICTITIOUS BOOK
-(EN).distillat.json`, sont copiées automatiquement au premier démarrage dans
+(EN).dstl`, sont copiées automatiquement au premier démarrage dans
 le dossier normal des fiches (`Documents\Distillat\Fiches`) : ouvrez-les via
 **Charger une fiche…** (ou en les glissant-déposant dans l'application) pour
 voir à quoi ressemble un résultat complet (couverture, résumé court, résumé
@@ -63,93 +57,51 @@ pour démontrer le rendu de l'application - il ne s'agit ni d'un vrai livre, ni
 d'un vrai résumé, ni d'une vraie autrice. Ne cherchez pas ce livre en librairie
 ou en ligne : ne le trouverez pas, il n'a jamais existé.
 
+Le contenu narratif de cette fiche (intrigue, personnages, thèmes) a été
+généré par IA : attendez-vous à des poncifs et clichés à la tonne, l'objectif
+étant de démontrer la mise en forme de l'application, pas d'atteindre la
+qualité littéraire d'une intrigue originale.
+
 ## Fonctionnement
 
 1. Glissez-déposez un fichier `.epub`, `.pdf` **ou une fiche déjà générée**
-   (`.distillat.json`) dans la zone prévue, ou cliquez pour parcourir (même
-   choix). Déposer un EPUB/PDF prépare un nouveau résumé ; déposer une fiche
+   (`.dstl`, ou l'ancien format `.distillat.json` encore reconnu) dans la
+   zone prévue, ou cliquez pour parcourir (même choix). Déposer un EPUB/PDF
+   prépare un nouveau résumé ; déposer une fiche
    l'ouvre directement, comme avec **Charger une fiche…**. Le format EPUB
    donne généralement un meilleur résultat pour un livre à résumer : le PDF
-   n'a pas de structure de chapitres exploitable (découpage par blocs de
-   pages arbitraires pour les livres volumineux). La couverture d'un PDF est
-   obtenue en rendant sa première page en image, telle qu'elle s'affiche à
-   l'écran.
-2. Cliquez sur **Résumer**. La zone de dépôt est désactivée pendant toute la
-   durée du traitement, pour éviter de sélectionner un autre fichier ou
-   d'ouvrir une autre fiche par-dessus le résumé en cours.
-3. L'application compte les tokens du texte extrait via l'API Gemini :
-   - si le texte tient sous la limite de débit du palier gratuit (tokens par
-     minute), les deux résumés, les personnages principaux et l'analyse
-     littéraire sont générés en un seul appel ;
-   - sinon (livre volumineux), le texte est découpé en lots de plusieurs
-     chapitres consécutifs (table des matières de l'EPUB, ou blocs de pages
-     pour un PDF ; le plus de chapitres possible par lot sans dépasser cette
-     même limite de débit, pour limiter le nombre de requêtes), chaque lot
-     est résumé en un appel, puis un dernier appel reçoit l'ensemble de ces
-     résumés et produit en une seule fois les deux résumés finaux, les
-     personnages principaux et l'analyse littéraire. Si ce découpage ne
-     produit qu'un seul lot (livre tout juste au-dessus de la limite), les
-     deux résumés, les personnages et l'analyse sont produits directement en
-     un seul appel à partir de ce lot, sans appel intermédiaire par lot ni
-     appel de fusion séparé. Si un échec survient en
-     cours de route (quota atteint, réponse Gemini illisible...), les lots
-     déjà résumés avec succès sont conservés : redéposer le même fichier et
-     cliquer de nouveau sur **Résumer** reprend directement exactement là où
-     le traitement s'était arrêté, sans reformuler ce qui a déjà été obtenu.
-     Un ou plusieurs livres peuvent rester ainsi en attente de reprise ; au
-     démarrage de l'application, si c'est le cas, une fenêtre les liste tous
-     et permet d'en charger un directement (bouton **Reprendre la
-     sélection**), sans avoir à le retrouver et le redéposer soi-même - il
-     suffit ensuite de cliquer sur **Résumer** pour reprendre sa génération.
-     Le bouton **Supprimer** de cette fenêtre efface l'état de reprise d'un
-     livre (pour repartir de zéro à la place) ; le fichier correspondant est
-     envoyé à la corbeille Windows plutôt que supprimé sans recours. Cette
-     même fenêtre reste accessible à tout moment en cours de session via le
-     bouton **Reprises en attente** situé à côté de **Résumer** (grisé s'il
-     n'existe aucun livre en attente, ou si tous les livres en attente sont
-     déjà en cours de traitement ailleurs).
-     Si plusieurs fenêtres de Distillat sont ouvertes en parallèle, un même
-     livre ne peut être généré ou repris que dans une seule fenêtre à la
-     fois, dès sa simple sélection (pas besoin de cliquer sur **Résumer**) :
-     cette fenêtre de reprise indique en direct les livres déjà sélectionnés
-     ou en cours de génération dans une autre fenêtre (mention dédiée,
-     entrée grisée non sélectionnable), et lancer malgré tout la génération
-     d'un livre déjà traité ailleurs est refusé avec un message explicite,
-     sans consommer de quota.
-4. Un petit son discret est joué dès que la fiche s'affiche avec succès. Le
-   résultat (toujours dans la langue actuellement choisie pour
+   n'a pas de structure de chapitres exploitable.
+2. Cliquez sur **Résumer**. Selon la taille du livre, la génération se fait
+   en un seul appel à l'API Gemini ou, pour un livre volumineux, en
+   plusieurs appels successifs (résumé par lots de chapitres puis fusion
+   finale). Si un échec survient en cours de route (quota atteint, réponse
+   Gemini illisible...), le travail déjà accompli est conservé : redéposer
+   le même fichier et recliquer sur **Résumer** reprend directement là où le
+   traitement s'était arrêté. Un ou plusieurs livres peuvent ainsi rester en
+   attente de reprise ; le bouton **Reprises en attente** à côté de
+   **Résumer** permet de les retrouver et d'en reprendre un à tout moment.
+   Si plusieurs fenêtres de Distillat sont ouvertes en parallèle, un même
+   livre ne peut être généré ou repris que dans une seule fenêtre à la fois.
+3. Le résultat (toujours dans la langue actuellement choisie pour
    l'interface, quelle que soit la langue du livre - voir
    [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches))
    s'affiche dans 5 onglets : **Couverture** (image, titre, auteur),
-   **Résumé court** (deux à trois paragraphes maximum), **Résumé
-   détaillé** (au moins 1500 mots, structuré par partie, bien davantage pour
-   un roman long), **Personnages** (fiches des personnages principaux et des
-   groupes ou organisations centraux à l'intrigue - faction, conseil, armée...
-   - typiquement 3 à 20 entrées selon la richesse du roman) et **Analyse**
-   littéraire (au moins 2500 à 4000 mots, structurée par thème, style et
-   portée de l'œuvre).
-   Ces cibles sont indiquées à Gemini, pas des garanties strictes. Les titres
-   de section que Gemini structure en Markdown (`#`, `##`, `###`...) sont
-   affichés mis en forme (gras, taille) sans les balises visibles. Le contenu
-   de tous les onglets est directement éditable : cliquez dans un champ et
-   modifiez le texte au clavier (résumés, analyse, nom et description de
-   chaque personnage, et titre du livre comme nom de l'auteur sur l'onglet
-   Couverture). Toute édition est reprise automatiquement lors d'une
-   sauvegarde (fiche `.distillat.json` ou export `.pdf`), balises de titre
-   comprises. Un clic droit sur l'image de l'onglet Couverture (qu'une
-   couverture ait été trouvée automatiquement ou non) permet de choisir
-   manuellement une image sur le disque pour la définir ou la remplacer, sans
-   avoir à régénérer la fiche.
-5. Cliquez sur **Sauvegarder en .pdf** pour exporter l'ensemble en document
+   **Résumé court**, **Résumé détaillé** (structuré par partie),
+   **Personnages** (fiches des personnages principaux et des groupes ou
+   organisations centraux à l'intrigue) et **Analyse** littéraire
+   (structurée par thème, style et portée de l'œuvre). Le contenu de tous
+   les onglets est directement éditable : cliquez dans un champ et modifiez
+   le texte au clavier. Toute édition est reprise automatiquement lors d'une
+   sauvegarde (fiche `.dstl` ou export `.pdf`). Un clic droit sur l'image de
+   l'onglet Couverture permet de choisir manuellement une image sur le
+   disque pour la définir ou la remplacer, sans avoir à régénérer la fiche.
+4. Cliquez sur **Exporter en .pdf** pour exporter l'ensemble en document
    PDF mis en forme, ou sur **Sauvegarder la fiche…** pour l'enregistrer sous
-   forme de fichier JSON autonome (`.distillat.json`) rechargeable plus tard
-   via **Charger une fiche…** (voir
-   [Emplacement des fichiers](#emplacement-des-fichiers) pour savoir où). Si la
+   forme de fichier JSON autonome (`.dstl`) rechargeable plus tard via
+   **Charger une fiche…**, en la glissant-déposant dans l'application, ou en
+   double-cliquant dessus directement dans l'Explorateur Windows. Si la
    fiche affichée n'a pas été sauvegardée, l'application demande confirmation
-   avant de la remplacer (nouveau fichier, nouveau résumé, fiche déposée ou
-   chargée, fermeture de la fiche ou de l'application). Une confirmation est
-   également demandée si l'application est fermée pendant qu'une génération
-   est en cours (la fiche en cours de génération serait perdue).
+   avant de la remplacer ou de se fermer.
 
 La clé API Gemini est demandée au premier lancement et stockée de façon
 chiffrée via le Gestionnaire d'identification Windows (voir
@@ -158,29 +110,19 @@ API (un nom + une clé chacun) peuvent être enregistrés via le bouton
 **Profils**, pour lancer plusieurs instances de Distillat en parallèle sur
 des comptes différents : chaque instance se voit attribuer automatiquement,
 à son démarrage, le premier profil non déjà utilisé par une autre instance
-ouverte sur le même ordinateur, sans manipulation manuelle. Deux profils ne
-peuvent pas partager le même nom ni la même clé API ; un profil actif dans
-une instance ne peut pas être modifié ou supprimé depuis une autre instance,
-ni pendant qu'une génération est en cours avec lui. Chaque profil permet
-aussi de choisir le modèle Gemini utilisé (voir
-[Suivi des quotas](#suivi-des-quotas)). Les prompts personnalisés
-et les limites de quota RPM/TPM/RPD personnalisées (voir plus bas) sont
-propres à chaque profil. Un bouton dédié, à droite du titre en haut de la
-fenêtre, permet d'ouvrir directement une nouvelle instance de Distillat sans
-avoir à relancer l'exécutable ou le script manuellement (4 instances
-simultanées maximum sur le même ordinateur) ; chaque nouvelle fenêtre s'ouvre
-légèrement décalée par rapport aux précédentes pour rester visible à côté
-d'elles, et ce bouton se désactive dans toutes les fenêtres ouvertes le temps
-qu'un lancement en cours se termine, pour ne jamais dépasser cette limite en
-cliquant plusieurs fois rapidement.
+ouverte sur le même ordinateur. Le modèle Gemini utilisé, les prompts
+personnalisés et les limites de quota (voir
+[Suivi des quotas](#suivi-des-quotas)) sont propres à chaque profil. Un
+bouton dédié, à droite du titre en haut de la fenêtre,
+permet d'ouvrir directement une nouvelle instance de Distillat (4 instances
+simultanées maximum sur le même ordinateur).
 
-Le bouton **Prompts** ouvre une fenêtre permettant de consulter et, si
-souhaité, de modifier les prompts envoyés à Gemini (un par cas de figure
-décrit ci-dessus), chacun réinitialisable indépendamment des autres. Ils
-fonctionnent tels quels : les modifier reste possible mais à vos risques et
-périls, comme le rappelle un avertissement dans la fenêtre. Un prompt
-personnalisé est enregistré séparément pour chaque langue de l'interface :
-le modifier en français n'affecte jamais sa version anglaise, et inversement.
+Le bouton **Prompts** ouvre une fenêtre permettant de consulter et de
+modifier les prompts envoyés à Gemini, chacun réinitialisable
+indépendamment des autres. Ils fonctionnent tels quels : les modifier reste
+possible mais à vos risques et périls, comme le rappelle un avertissement
+dans la fenêtre. Un prompt personnalisé est enregistré séparément pour
+chaque langue de l'interface.
 
 ## Langue de l'interface et des fiches
 
@@ -218,11 +160,9 @@ développer l'application (relevés le 18/07/2026) - Google ne les expose pas
 via l'API, ils **varient d'un compte à l'autre et peuvent changer dans le
 temps**. Vérifiez les vôtres sur
 [aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit) et
-ajustez-les si besoin via le bouton **Limites de quota** de l'application ;
-elles sont alors enregistrées dans un fichier propre à chaque combinaison de
-profil et de modèle, sous `%APPDATA%\Distillat\`. Chaque modèle utilisé avec
-un même profil a ainsi ses propres compteurs et limites, sans jamais mélanger
-leur consommation.
+ajustez-les si besoin via le bouton **Limites de quota** de l'application.
+Chaque profil et chaque modèle a ses propres compteurs et limites, sans
+jamais mélanger leur consommation.
 
 Avec seulement 20 requêtes par jour, le quota quotidien est le facteur le
 plus limitant : chaque livre consomme au minimum 1 requête (génération),
@@ -249,7 +189,7 @@ seront plus fiables. Il est en revanche propre à chaque clé API : passer
 d'un profil à un autre (bouton **Profils**) affiche aussitôt le compteur de
 la clé de ce profil, sans jamais le mélanger avec celui d'un autre.
 
-Une explication simplifiée de ce fonctionnement, sans jargon technique, est
+Une explication simplifiée de ce fonctionnement est
 également accessible directement dans l'application via le bouton **?** situé
 à côté du statut de génération.
 
@@ -306,75 +246,25 @@ lors d'une mise à jour) :
 
 - **Clé API** : Gestionnaire d'identification Windows (voir
   [Sécurité de la clé API](#sécurité-de-la-clé-api)).
-- **`.quota_state_<hash>_<modèle>.json`** et **`quota_limits_<hash>_<modèle>.json`**
-  (compteur de requêtes du jour, et limites RPM/TPM/RPD personnalisées si
-  modifiées via le bouton **Limites de quota**, un fichier de chaque par
-  combinaison de clé API et de modèle pour ne jamais mélanger deux comptes,
-  ni deux modèles utilisés avec une même clé), **`settings.json`** (regroupe
-  la langue de l'interface choisie, voir
-  [Langue de l'interface et des fiches](#langue-de-linterface-et-des-fiches) ;
-  la liste des profils de clé API, avec le modèle Gemini choisi pour chacun ;
-  les prompts personnalisés par profil puis par langue, si modifiés via le
-  bouton **Prompts** ; et les derniers dossiers utilisés pour une fiche et
-  pour un export PDF, voir
-  ci-dessous), **`.generation_resume_<hash>.json`** (un fichier par livre,
-  lots de chapitres déjà résumés pour une génération interrompue par un
-  échec, avec le modèle Gemini utilisé pour cette génération ; absent en
-  l'absence d'échec, supprimé dès que la génération de ce
-  livre se termine avec succès) et **`debug_logs\`**
-  (fichiers de diagnostic : réponses Gemini brutes sauvegardées
-  automatiquement quand une réponse reste illisible même après tentative de
-  réparation automatique (les 5 fichiers les plus récents sont conservés,
-  les plus anciens étant supprimés automatiquement), et journal
-  `api_requests.log` consignant chaque appel envoyé à Gemini - horodatage,
-  type d'appel, tokens, durée, résultat, jamais le contenu du livre - pour
-  pouvoir comparer la consommation réelle avec le dashboard Google AI Studio
-  (ne conserve que les 5 dernières générations de fiche) :
-  `%APPDATA%\Distillat\`.
-- **Fiches sauvegardées** (`.distillat.json`) et **exports PDF** :
-  `Documents\Distillat\Fiches\` au tout premier usage, puis le dernier dossier
-  utilisé pour ce type de fichier (fiche ou PDF, mémorisés séparément) est
-  proposé par défaut par **Sauvegarder la fiche…**, **Sauvegarder en .pdf** et
-  **Charger une fiche…**, y compris après redémarrage de l'application (un
-  autre emplacement peut toujours être choisi ; les sous-dossiers y sont sans
-  problème). Si la fiche affichée a été chargée depuis un fichier, c'est son
-  dossier d'origine qui est proposé en priorité, avec son nom de fichier ; la
-  réenregistrer sur son fichier d'origine ne demande aucune confirmation de
-  remplacement (un message confirme simplement la modification). La
-  couverture est automatiquement redimensionnée et recompressée avant d'être
-  stockée dans la fiche ou le document PDF, pour éviter qu'une image haute
-  résolution alourdisse inutilement le fichier ; une fiche existante
-  contenant encore une couverture surdimensionnée (créée par une version
-  antérieure) est allégée automatiquement dès son prochain chargement. Le
-  sélecteur de fichier ouvert en cliquant sur la zone de dépôt, ainsi que
-  celui utilisé pour choisir manuellement une couverture, proposent chacun de
-  la même façon leur propre dernier dossier utilisé.
-- **`LICENSE`**, **`CHANGELOG.md`**, **icône de l'application**
-  (`icons/open-book_4681875.png`), **son de fin de génération**
-  (`assets/success.wav`) et **fichiers de traduction**
-  (`locales/fr.json`, `locales/en.json`) : embarqués à la compilation (dans
-  `_internal/`). Le `LICENSE` et le `CHANGELOG.md` sont accessibles depuis le
-  footer de l'application (« Copyright ... - Licence GNU GPL v3 » à gauche ;
-  liens « Code source », « Téléchargement », « Changelog » et « Page web »
-  (site du projet, https://bruno-aublet.github.io/Distillat/) à droite).
+- **Fichiers techniques** (compteurs et limites de quota, réglages,
+  profils, prompts personnalisés, état de reprise, journaux de diagnostic) :
+  `%APPDATA%\Distillat\`. Le détail de chaque fichier est documenté dans
+  `ARCHITECTURE.md` pour qui souhaite l'implémentation exacte.
+- **Fiches sauvegardées** (`.dstl`) et **exports PDF** : `Documents\Distillat\Fiches\`
+  au tout premier usage, puis le dernier dossier utilisé pour ce type de
+  fichier (fiche ou PDF, mémorisés séparément) est proposé par défaut par
+  **Sauvegarder la fiche…**, **Sauvegarder en .pdf** et **Charger une
+  fiche…**, y compris après redémarrage de l'application (un autre
+  emplacement peut toujours être choisi). Si la fiche affichée a été chargée
+  depuis un fichier, c'est son dossier d'origine qui est proposé en priorité.
+- **`LICENSE`**, **`CHANGELOG.md`**, icône, son et fichiers de traduction :
+  embarqués à la compilation. Le `LICENSE` et le `CHANGELOG.md` sont
+  accessibles depuis le footer de l'application (liens « Code source »,
+  « Téléchargement », « Changelog » et « Page web »).
 
 En développement (`python main.py`), tous ces emplacements sont identiques au
-mode compilé, y compris les fichiers techniques (`.quota_state_<hash>_<modèle>.json`,
-`quota_limits_<hash>_<modèle>.json`, `settings.json`, `.generation_resume_<hash>.json`), désormais
-toujours dans `%APPDATA%\Distillat\` quel que soit le mode de lancement (pour
-que le suivi de quota reflète la même consommation réelle, peu importe la
-façon de lancer l'application). Le
-dossier `Fiches/` à la racine du projet ne sert qu'à héberger la fiche
-d'exemple fournie avec le code.
-
-Si vous mettez à jour depuis une version antérieure qui stockait ces fichiers
-à côté de l'exécutable, l'application les déplace automatiquement vers les
-nouveaux emplacements au premier lancement (sans jamais écraser un fichier
-déjà présent à la destination). De même, si vous mettez à jour depuis une
-version antérieure où `settings.json`, les prompts personnalisés et les
-derniers dossiers utilisés étaient chacun dans leur propre fichier
-(`last_dirs.json`, `prompts.json`), leur contenu est fusionné automatiquement
-dans `settings.json` au premier lancement, sans perte de données.
+mode compilé (`%APPDATA%\Distillat\`), pour que le suivi de quota reflète la
+même consommation réelle quelle que soit la façon de lancer l'application.
 
 ## Licence
 
@@ -395,8 +285,7 @@ If this sounds familiar, Distillat is for you. Simply drop your EPUB or PDF
 file into the designated area: you get a summary, character sheets, and an
 analysis of the work, ready to view or export to PDF.
 
-The application relies on Gemini's free tier (Flash), with a choice between
-several models depending on the API key profile in use (see
+The application relies on Gemini's free tier (Flash) (see
 [Quota tracking](#quota-tracking)).
 
 **Privacy**: the book's text is sent to the Gemini API to generate the
@@ -407,18 +296,13 @@ its services - avoid submitting sensitive or confidential documents.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
 `.zip` file to download is at the bottom of the release page).
 
-**Version 1.3.6**
+**Version 1.4.0**
 
 Windows application with a PyQt5 interface to generate a complete reading
 report (summaries, characters, analysis) from an EPUB or PDF book, via the
 Gemini API (free). The interface and the language of generated reports are
 available in French and English (see
 [Interface and report language](#interface-and-report-language)).
-
-The version number is displayed in the window title and in the executable's
-Windows properties (right-click `Distillat.exe` > Properties > Details).
-Single source of truth: `app/__version__.py` (manually synchronized with
-`version_info.txt` for the .exe metadata).
 
 On each launch, the application silently checks in the background whether a
 newer version is available on the
@@ -429,9 +313,9 @@ link to the download page.
 
 ## Sample report
 
-Two sample reports, `FICHE TEST - Les Terres Oubliées - LIVRE FICTIF.distillat.json`
+Two sample reports, `FICHE TEST - Les Terres Oubliées - LIVRE FICTIF.dstl`
 and its English version `TEST SHEET - The Forgotten Lands - FICTITIOUS BOOK
-(EN).distillat.json`, are automatically copied on first launch into the
+(EN).dstl`, are automatically copied on first launch into the
 normal reports folder (`Documents\Distillat\Fiches`): open them via
 **Load a report…** (or by dragging and dropping them into the application) to
 see what a complete result looks like (cover, short summary, detailed
@@ -445,85 +329,49 @@ to demonstrate what the application produces - it is not a real book, a real
 summary, or a real author. Don't look for this book in a bookstore or
 online: you won't find it, it never existed.
 
+This report's narrative content (plot, characters, themes) was itself
+generated by AI: expect a truckload of tropes and clichés, the goal being to
+demonstrate the application's formatting, not to achieve the literary
+quality of an original plot.
+
 ## How it works
 
 1. Drag and drop an `.epub`, `.pdf` file **or an already generated report**
-   (`.distillat.json`) into the designated area, or click to browse (same
-   choice). Dropping an EPUB/PDF prepares a new summary; dropping a report
-   opens it directly, same as **Load a report…**. The EPUB format generally
-   gives a better result for a book to summarize: PDF has no usable chapter
-   structure (arbitrary page-block splitting for large books). A PDF's cover
-   is obtained by rendering its first page as an image, exactly as it
-   appears on screen.
-2. Click **Summarize**. The drop zone is disabled for the entire duration of
-   processing, to avoid selecting another file or opening another report on
-   top of the summary currently in progress.
-3. The application counts the tokens of the extracted text via the Gemini
-   API:
-   - if the text fits under the free tier's rate limit (tokens per minute),
-     both summaries, the main characters, and the literary analysis are
-     generated in a single call;
-   - otherwise (large book), the text is split into batches of several
-     consecutive chapters (EPUB table of contents, or page blocks for a
-     PDF; as many chapters as possible per batch without exceeding this same
-     rate limit, to limit the number of requests), each batch is summarized
-     in one call, then a final call receives all these summaries and
-     produces, in one go, both final summaries, the main characters, and the
-     literary analysis. If a failure occurs along the way (quota reached,
-     unreadable Gemini response...), batches already summarized
-     successfully are kept: dropping the same file again and clicking
-     **Summarize** again offers to resume exactly where processing had
-     stopped, without redoing what was already obtained. One or more books
-     can remain waiting to be resumed this way; on startup, if that is the
-     case, a window lists all of them and lets you resume one directly
-     (**Resume selection** button), without having to find and drop the file
-     again yourself. The **Delete** button in this window clears a book's
-     resume state (to start over instead); the corresponding file is sent to
-     the Windows Recycle Bin rather than permanently deleted. This same
-     window stays reachable at any time during the session via the
-     **Pending resumes** button next to **Summarize** (grayed out if there
-     is no book waiting, or if every waiting book is already being processed
-     elsewhere).
-     If several Distillat windows are open in parallel, a given book can
-     only be generated or resumed in one window at a time, from the moment
-     it is selected (no need to click **Summarize**): the resume window
-     shows live which books are already selected or being generated in
-     another window (dedicated mention, grayed-out non-selectable entry),
-     and starting the generation of a book already being processed
-     elsewhere anyway is refused with an explicit message, without consuming
-     any quota.
-4. A short, discreet sound plays as soon as the report is displayed
-   successfully. The result (always in the language currently chosen for the interface,
-   regardless of the book's language - see
+   (`.dstl`, or the old `.distillat.json` format, still recognized) into the
+   designated area, or click to browse (same choice). Dropping an EPUB/PDF
+   prepares a new summary; dropping a report opens it directly, same as
+   **Load a report…**. The EPUB format generally gives a better result for a
+   book to summarize: PDF has no usable chapter structure.
+2. Click **Summarize**. Depending on the book's size, generation happens in
+   a single call to the Gemini API or, for a large book, in several
+   successive calls (chapter-batch summaries followed by a final merge). If
+   a failure occurs along the way (quota reached, unreadable Gemini
+   response...), the work already done is kept: dropping the same file
+   again and clicking **Summarize** again resumes exactly where processing
+   had stopped. One or more books can remain waiting to be resumed this
+   way; the **Pending resumes** button next to **Summarize** lets you find
+   and resume one at any time. If several Distillat windows are open in
+   parallel, a given book can only be generated or resumed in one window at
+   a time.
+3. The result (always in the language currently chosen for
+   the interface, regardless of the book's language - see
    [Interface and report language](#interface-and-report-language)) is
    displayed in 5 tabs: **Cover** (image, title, author), **Short
-   summary** (two to three paragraphs maximum), **Detailed
-   summary** (at least 1500 words, structured by part, considerably more for
-   a long novel), **Characters** (sheets for the main characters and for
-   groups or organizations central to the plot - faction, council, army...
-   - typically 3 to 20 entries depending on how rich the novel is), and
-   **Literary analysis** (at least 2500 to 4000 words, structured by theme,
-   style, and the work's significance).
-   These are targets given to Gemini, not strict guarantees. Section
-   headings that Gemini structures in Markdown (`#`, `##`, `###`...) are
-   displayed formatted (bold, size) without the visible tags. The content of
-   every tab is directly editable: click into a field and edit the text with
-   the keyboard (summaries, analysis, name and description of each
-   character, and the book's title as well as the author's name on the
-   Cover tab). Any edit is automatically picked up when saving (`.distillat.json`
-   report or `.pdf` export), heading tags included. Right-clicking the image
-   on the Cover tab (whether a cover was found automatically or not) lets you
-   manually pick an image from disk to set or replace the cover, without
-   having to regenerate the report.
-5. Click **Export to .pdf** to export everything as a formatted PDF
+   summary**, **Detailed summary** (structured by part), **Characters**
+   (sheets for the main characters and for groups or organizations central
+   to the plot), and **Literary analysis** (structured by theme, style, and
+   the work's significance). The content of every tab is directly editable:
+   click into a field and edit the text with the keyboard. Any edit is
+   automatically picked up when saving (`.dstl` report or `.pdf` export).
+   Right-clicking the image on the Cover tab lets you manually pick an
+   image from disk to set or replace the cover, without having to
+   regenerate the report.
+4. Click **Export to .pdf** to export everything as a formatted PDF
    document, or **Save the report…** to save it as a standalone JSON file
-   (`.distillat.json`) reloadable later via **Load a report…** (see
-   [File locations](#file-locations) to know where). If the displayed
-   report hasn't been saved, the application asks for confirmation before
-   replacing it (new file, new summary, dropped or loaded report, closing
-   the report or the application). Confirmation is also asked if the
-   application is closed while a generation is in progress (the report
-   being generated would be lost).
+   (`.dstl`) reloadable later via **Load a report…**, by dragging and
+   dropping it into the application, or by double-clicking it directly in
+   Windows Explorer. If the displayed report hasn't been saved, the
+   application asks for confirmation before replacing it or closing.
 
 The Gemini API key is requested on first launch and stored encrypted via the
 Windows Credential Manager (see
@@ -531,24 +379,18 @@ Windows Credential Manager (see
 plus a key each) can be registered via the **Profiles** button, to run
 several Distillat instances in parallel with different accounts: each
 instance is automatically assigned, on startup, the first profile not
-already in use by another instance open on the same computer, with no
-manual step required. Two profiles cannot share the same name or the same
-API key; a profile active in one instance cannot be edited or deleted from
-another instance, nor while a generation is running with it. Each profile
-also lets you choose the Gemini model used (see
-[Quota tracking](#quota-tracking)). Custom prompts
-and custom RPM/TPM/RPD quota limits (see below) are specific to each
-profile. A dedicated button, to the right of the title at the top of the
-window, opens a new Distillat instance directly, without having to relaunch
-the executable or the script manually (up to 4 simultaneous instances on
-the same computer).
+already in use by another instance open on the same computer. The Gemini
+model used, custom prompts, and quota limits (see
+[Quota tracking](#quota-tracking)) are specific to each profile. A
+dedicated button, to the right of the title at the top of the window, opens
+a new Distillat instance directly (up to 4 simultaneous instances on the
+same computer).
 
-The **Prompts** button opens a window to view and, if desired, edit the
-prompts sent to Gemini (one per case described above), each independently
-resettable. They work as-is: editing them is possible but at your own risk,
-as a warning in the window reminds you. A custom prompt is stored separately
-for each interface language: editing it in French never affects its English
-version, and vice versa.
+The **Prompts** button opens a window to view and edit the
+prompts sent to Gemini, each independently resettable. They work as-is:
+editing them is possible but at your own risk, as a warning in the window
+reminds you. A custom prompt is stored separately for each interface
+language.
 
 ## Interface and report language
 
@@ -586,11 +428,9 @@ develop the application (recorded on 2026-07-18) - Google does not expose
 them via the API, they **vary from one account to another and may change
 over time**. Check your own at
 [aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit) and
-adjust them if needed via the **Quota limits** button in the application;
-they are then stored in a file specific to each profile-and-model
-combination, under `%APPDATA%\Distillat\`. Each model used with a given
-profile therefore has its own counters and limits, never mixing their
-consumption.
+adjust them if needed via the **Quota limits** button in the application.
+Each profile and each model has its own counters and limits, never mixing
+their consumption.
 
 With only 20 requests per day, the daily quota is the most limiting factor:
 each book consumes at least 1 request (generation), more if the book is
@@ -670,70 +510,24 @@ update):
 
 - **API key**: Windows Credential Manager (see
   [API key security](#api-key-security)).
-- **`.quota_state_<hash>_<model>.json`** and **`quota_limits_<hash>_<model>.json`**
-  (today's request counter, and custom RPM/TPM/RPD limits if changed via the
-  **Quota limits** button, one file of each per API key and model combination
-  so two accounts, or two models used with the same key, are never mixed),
-  **`settings.json`** (groups together the chosen interface
-  language, see
-  [Interface and report language](#interface-and-report-language); the list
-  of API key profiles, with the Gemini model chosen for each; custom prompts
-  per profile then per language, if changed via the **Prompts** button; and
-  the last folders used for a report and for a PDF export, see below),
-  **`.generation_resume_<hash>.json`** (one file per book, chapter batches
-  already summarized for a generation interrupted by a failure, along with
-  the Gemini model used for that generation; absent if
-  there was no failure, removed as soon as that book's generation finishes
-  successfully) and
-  **`debug_logs\`** (diagnostic files: raw Gemini responses saved
-  automatically when a response stays unreadable even after an automatic
-  repair attempt (only the 5 most recent files are kept, older ones being
-  deleted automatically), and an `api_requests.log` journal recording every
-  call sent to Gemini - timestamp, call type, tokens, duration, outcome,
-  never the book content itself - so actual consumption can be compared with
-  the Google AI Studio dashboard (keeps only the last 5 report generations)):
-  `%APPDATA%\Distillat\`.
-- **Saved reports** (`.distillat.json`) and **PDF exports**:
-  `Documents\Distillat\Fiches\` on first use, then the last folder used for
-  that type of file (report or PDF, remembered separately) is offered by
-  default by **Save the report…**, **Export to .pdf**, and **Load a
-  report…**, including after restarting the application (another location
-  can always be chosen; subfolders work fine there too). If the displayed
-  report was loaded from a file, its original folder is offered first,
-  along with its file name; saving it back to its original file doesn't ask
-  for overwrite confirmation (a message simply confirms the update was
-  saved). The cover is automatically resized and recompressed before being
-  stored in the report or the PDF document, to avoid a high-resolution image
-  needlessly bloating the file; an existing report still containing an
-  oversized cover (created by an earlier version) is lightened automatically
-  the next time it is loaded. The file picker opened by clicking the drop
-  zone, as well as the one used to manually pick a cover, each likewise offer
-  their own last used folder.
-- **`LICENSE`**, **`CHANGELOG.md`**, **application icon**
-  (`icons/open-book_4681875.png`), **end-of-generation sound**
-  (`assets/success.wav`), and **translation files**
-  (`locales/fr.json`, `locales/en.json`): bundled at compile time (in
-  `_internal/`). The `LICENSE` and `CHANGELOG.md` are accessible from the
-  application's footer ("Copyright ... - GNU GPL v3 license" on the left;
-  "Source code", "Download", "Changelog", and "Website" (project site,
-  https://bruno-aublet.github.io/Distillat/) links on the right).
+- **Technical files** (quota counters and limits, settings, profiles, custom
+  prompts, resume state, diagnostic logs): `%APPDATA%\Distillat\`. Each
+  file's exact purpose is documented in `ARCHITECTURE.md` for anyone who
+  needs the implementation detail.
+- **Saved reports** (`.dstl`) and **PDF exports**: `Documents\Distillat\Fiches\`
+  on first use, then the last folder used for that type of file (report or
+  PDF, remembered separately) is offered by default by **Save the report…**,
+  **Export to .pdf**, and **Load a report…**, including after restarting the
+  application (another location can always be chosen). If the displayed
+  report was loaded from a file, its original folder is offered first.
+- **`LICENSE`**, **`CHANGELOG.md`**, application icon, sound, and
+  translation files: bundled at compile time. The `LICENSE` and
+  `CHANGELOG.md` are accessible from the application's footer ("Source
+  code", "Download", "Changelog", and "Website" links).
 
 In development (`python main.py`), all these locations are identical to the
-compiled mode, including the technical files (`.quota_state_<hash>_<model>.json`,
-`quota_limits_<hash>_<model>.json`, `settings.json`, `.generation_resume_<hash>.json`), now always
-in `%APPDATA%\Distillat\` regardless of the launch mode (so that quota
-tracking reflects the same actual consumption, no matter how the application
-is launched). The `Fiches/` folder at the project root only hosts the
-sample report shipped with the code.
-
-If you're updating from an earlier version that stored these files next to
-the executable, the application automatically moves them to the new
-locations on first launch (never overwriting a file already present at the
-destination). Likewise, if you're updating from an earlier version where
-`settings.json`, custom prompts, and the last folders used were each in
-their own file (`last_dirs.json`, `prompts.json`), their content is
-automatically merged into `settings.json` on first launch, without any data
-loss.
+compiled mode (`%APPDATA%\Distillat\`), so that quota tracking reflects the
+same actual consumption no matter how the application is launched.
 
 ## License
 

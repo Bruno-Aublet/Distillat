@@ -208,7 +208,8 @@ résumé court, résumé détaillé, personnages/entités principaux et analyse
 littéraire, toujours dans la langue actuellement choisie pour l'interface
 (français ou anglais, voir `app/i18n.py`) quelle que soit la langue source. La
 fiche est éditable dans l'UI, sauvegardable dans un format JSON autonome
-(`.distillat.json`) et exportable en PDF avec mise en page éditoriale.
+(`.dstl`, anciennement `.distillat.json` - voir `ARCHITECTURE.md`) et
+exportable en PDF avec mise en page éditoriale.
 
 Flux utilisateur type : glisser-déposer un EPUB/PDF -> génération (thread
 séparé, avec suivi de quota) -> fiche affichée dans 5 onglets éditables ->
@@ -216,7 +217,10 @@ sauvegarde JSON et/ou export PDF.
 
 ## Index des modules (détails dans `ARCHITECTURE.md`)
 
-- **`main.py`** : point d'entrée, migration, init langue, lance `MainWindow`.
+- **`main.py`** : point d'entrée, migration, init langue, association de
+  fichier `.dstl`, routage d'un fichier ouvert par double-clic vers une
+  instance libre ou une nouvelle instance, splash screen pendant la
+  construction de `MainWindow`, lance `MainWindow`.
 - **`app/worker.py`** (`SummarizeWorker`) : extraction + appel Gemini hors
   thread UI.
 - **`app/config.py`** : emplacements de stockage persistants, profils de clé

@@ -14,6 +14,7 @@ a = Analysis(
         'ebooklib',
         'bs4',
         'reportlab',
+        'pikepdf',
         'pypdf',
         'pypdfium2',
         'keyring.backends.Windows',

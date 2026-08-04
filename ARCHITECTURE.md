@@ -12,7 +12,7 @@ résumé court, résumé détaillé, personnages/entités principaux et analyse
 littéraire, toujours dans la langue actuellement choisie pour l'interface
 (français ou anglais, voir `app/i18n.py`) quelle que soit la langue source. La
 fiche est éditable dans l'UI, sauvegardable dans un format JSON autonome
-(`.distillat.json`) et exportable en PDF avec mise en page éditoriale.
+(`.dstl`, anciennement `.distillat.json` - voir plus bas) et exportable en PDF avec mise en page éditoriale.
 
 Flux utilisateur type : glisser-déposer un EPUB/PDF -> génération (thread
 séparé, avec suivi de quota) -> fiche affichée dans 5 onglets éditables ->
@@ -20,12 +20,53 @@ sauvegarde JSON et/ou export PDF.
 
 ## Point d'entrée et flux général
 
-- **`main.py`** : point d'entrée. Migre les anciens fichiers de données
-  (`config.migrate_legacy_files()`), copie les fiches d'exemple dans le
+- **`main.py`** : point d'entrée. Copie les fiches d'exemple dans le
   dossier normal des fiches (`config.copy_sample_reports()`, voir
-  `app/config.py` ci-dessous), initialise la langue de l'UI
+  `app/config.py` ci-dessous), enregistre l'association de fichier `.dstl`
+  (`config.ensure_dstl_file_association()`), initialise la langue de l'UI
   (`i18n.init_language()`, avant toute construction de fenêtre puisque tous
-  les textes affichés en dépendent), configure l'icône, lance `MainWindow`.
+  les textes affichés en dépendent), configure l'icône, affiche un splash
+  screen (`QSplashScreen`, image `config.get_app_icon_path()` à sa taille
+  native 512x512, sans redimensionnement) pendant la construction de
+  `MainWindow`, lance `MainWindow`.
+
+  Le splash n'est affiché que juste avant `MainWindow(...)`, une fois établi
+  que cette instance va effectivement créer une fenêtre (donc jamais dans les
+  cas `_route_to_empty_instance()` réussi ou limite de 4 instances atteinte
+  ci-dessous, qui rendent la main sans fenêtre) ; il est fermé via
+  `splash.finish(window)` dès que `MainWindow` est construite, sans délai
+  minimal artificiel.
+
+  Si un chemin de fiche est passé en argument (`sys.argv[1]`, terminant par
+  `.dstl` ou `.distillat.json` - cas d'un double-clic Windows sur une fiche,
+  voir `config.ensure_dstl_file_association()`), `_detect_report_argument()`
+  le détecte et `_route_to_empty_instance()` tente de le transmettre à une
+  instance Distillat déjà vivante (`instance_lock.list_alive_instance_pids()`)
+  dont l'écran d'accueil est libre, avant de démarrer une nouvelle instance :
+  - Réserve chaque PID candidat via
+    `instance_lock.acquire_open_target_lock(pid)` (nouveau verrou fichier,
+    même mécanique que `acquire_profile_lock`/`acquire_book_lock`) avant de
+    l'interroger, pour qu'aucun autre process candidat (double-clic
+    quasi-simultané sur un autre fichier) ne puisse cibler la même instance
+    en même temps.
+  - Interroge cette instance via son canal `QLocalServer` existant (voir
+    `main_window._setup_new_instance_channel()`) avec un nouveau message
+    `"is_empty?"` : réponse synchrone `"empty"`/`"busy"` selon
+    `MainWindow._is_empty_state()` (rien sélectionné, rien affiché, aucune
+    génération en cours, aucune reprise en attente sélectionnée), attendue
+    via une mini-boucle d'événements locale (`QEventLoop` + timeout
+    `_PROBE_TIMEOUT_MS` = 800 ms, pour ne jamais bloquer sur une instance
+    injoignable/plantée).
+  - Si `"empty"` : envoie `f"open_report:{path}"` sur le même canal, libère
+    le verrou, et le nouveau process quitte sans jamais construire de
+    `MainWindow`. Sinon, passe au PID suivant.
+  - Si aucune instance vide n'est trouvée : si
+    `instance_lock.count_alive_instances() >= instance_lock.MAX_INSTANCES`,
+    affiche l'avertissement déjà utilisé par
+    `main_window._on_new_instance_clicked()` et s'arrête ; sinon démarre
+    normalement avec `MainWindow(initial_report_path=path)`, qui charge la
+    fiche juste après `_build_ui()` via `_load_report_from_path()` (même
+    méthode que le chargement manuel, migration `.distillat.json` incluse).
 - **`app/worker.py`** (`SummarizeWorker`, `QThread`) : exécute extraction du
   livre + appel Gemini hors du thread UI, pour ne pas geler l'interface.
   Émet des signaux Qt (`progress`, `quota_updated`, `finished_ok`, `failed`)
@@ -55,7 +96,7 @@ sauvegarde JSON et/ou export PDF.
     journal d'appels API `api_requests.log` (voir
     `gemini_client._log_api_call()` ci-dessous).
   - `Documents\Distillat\Fiches` (toujours) comme dossier de repli initial
-    pour les fiches `.distillat.json` et les exports PDF, tant qu'aucun
+    pour les fiches `.dstl` et les exports PDF, tant qu'aucun
     dossier n'a encore été mémorisé (voir ci-dessous).
   - `get_resource_dir()`/`get_app_icon_path()`/`get_success_sound_path()`/
     `get_mosaicview_logo_path()`/`get_mosaicview_exe_icon_path()` (ces deux
@@ -69,14 +110,49 @@ sauvegarde JSON et/ou export PDF.
     déclarée dans les `datas` de `distillat.spec`, sans quoi elle ne serait
     pas trouvée en mode compilé (fichier absent de `_MEIPASS`).
   - `copy_sample_reports()` (appelée depuis `main.py` à chaque démarrage) :
-    copie dans `get_reports_dir()` les fiches d'exemple `*.distillat.json` du
+    copie dans `get_reports_dir()` les fiches d'exemple `*.dstl` du
     dossier `Fiches/` du projet, embarqué sous `get_resource_dir()/Fiches` en
     mode compilé (`datas` de `distillat.spec`). Ne copie que les fichiers
-    `.distillat.json` (jamais `Fiches/Couverture.png`, image de travail
+    `.dstl` (jamais `Fiches/Couverture.png`, image de travail
     interne non destinée à être distribuée) et n'écrase jamais un fichier déjà
     présent à destination, pour ne jamais perdre une modification que
-    l'utilisateur y aurait faite (même philosophie que `migrate_legacy_files()`
-    ci-dessus).
+    l'utilisateur y aurait faite. Si l'utilisateur possède déjà la fiche
+    d'exemple sous l'ancien nom `*.distillat.json` (installation antérieure au
+    passage à `.dstl`), elle est renommée sur place plutôt que recopiée depuis
+    la source, pour éviter tout doublon de la même fiche sous les deux
+    extensions (voir la section "Migration `.distillat.json` -> `.dstl`"
+    ci-dessous). Une fonction `migrate_legacy_files()`
+    (ainsi que `_merge_legacy_settings_files()`,
+    `_migrate_legacy_api_key_to_profile()` et
+    `_cleanup_legacy_api_key_entry()`) existait jusqu'au 2026-08-04 pour
+    migrer les vestiges d'anciennes versions : elle déplaçait notamment sans
+    confirmation tout dossier `Fiches` trouvé à côté de l'exécutable (mode
+    compilé) vers `get_reports_dir()`. Supprimée ce jour-là (bug signalé par
+    l'utilisateur) car elle se déclenchait aussi sur une copie de sauvegarde
+    de l'application accompagnée d'une copie du dossier des fiches sur un
+    disque externe, déplaçant alors silencieusement des données de
+    sauvegarde de l'utilisateur vers `Documents\Distillat\Fiches` dès le
+    lancement de cette copie - aucune confirmation, aucune notification.
+    N'existe donc plus aucune migration automatique de `Fiches/`,
+    `.quota_state.json`, `last_dirs.json`/`prompts.json` legacy ou de
+    l'ancienne clé API unique.
+  - `ensure_dstl_file_association()` (appelée depuis `main.py`, uniquement en
+    mode compilé via `sys.frozen` - jamais en développement) : associe
+    l'extension `.dstl` à `Distillat.exe` dans le Registre Windows
+    (`HKEY_CURRENT_USER\Software\Classes`, aucun droit administrateur requis,
+    contrairement à `HKEY_CLASSES_ROOT`), pour qu'un double-clic sur une
+    fiche ouvre directement l'application (voir la logique de routage dans
+    `main.py` ci-dessus). N'écrit dans le Registre que si la commande
+    d'ouverture actuellement enregistrée (`Distillat.Report\shell\open\command`)
+    diffère de la cible (absente, ou pointant vers un ancien emplacement de
+    l'exe après déplacement du dossier) : pas de réécriture à chaque
+    lancement. Toute erreur d'accès Registre est absorbée silencieusement
+    (commodité, jamais bloquant pour le démarrage). Enregistre aussi un type
+    MIME dédié (`Content Type` = `application/vnd.distillat.report+json` sur
+    la clé `.dstl`, identifiant `vnd.` non déposé auprès de l'IANA) sans
+    aucun usage actuel ni par l'application ni par Windows en local (le
+    double-clic ne dépend que de l'association d'extension) : anticipation
+    d'un éventuel usage web futur.
   - Clés API Gemini stockées chiffrées via `keyring` (Gestionnaire
     d'identification Windows), jamais en clair sur disque. Depuis l'ajout du
     support multi-instances (2026-07-22, voir `app/instance_lock.py`
@@ -90,26 +166,11 @@ sauvegarde JSON et/ou export PDF.
     (service indisponible) plutôt que de laisser planter l'application.
     L'ancienne entrée keyring unique (`KEYRING_USERNAME =
     "gemini_api_key"`, `load_api_key()`/`save_api_key()`, conservées
-    inchangées) est reprise automatiquement dans un premier profil "Défaut"
-    par `_migrate_legacy_api_key_to_profile()` (appelée depuis
-    `migrate_legacy_files()`) si aucun profil n'existe encore ; cette
-    migration ne fait elle-même qu'une copie (jamais de déplacement), mais
-    `_cleanup_legacy_api_key_entry()` (appelée juste après par
-    `migrate_legacy_files()`, ajoutée à l'audit de sécurité du 2026-07-22)
-    supprime ensuite l'ancienne entrée keyring, uniquement après avoir
-    vérifié (relecture réelle via `find_profile_by_api_key()`) qu'une copie
-    identique de sa valeur existe bien dans l'entrée d'un profil - sans cette
-    purge, une copie du secret restait indéfiniment dans le Gestionnaire
-    d'identification Windows, survivant même à une rotation de clé faite
-    depuis l'UI (qui ne modifie que l'entrée du profil) ; une ancienne entrée
-    dont la valeur ne correspond à aucun profil (seule copie restante d'une
-    clé) est laissée intacte, aucune suppression sur un simple doute. Le
-    contrôle "aucun profil encore créé" et l'écriture de
-    cette migration se font sous le verrou inter-processus de settings.json
-    (audit du 2026-07-22) : deux instances lancées simultanément au premier
-    démarrage suivant la mise à jour créaient sinon chacune son propre
-    profil "Défaut" (UUID différents), la dernière écriture écrasant l'autre
-    et laissant son entrée keyring orpheline. `find_profile_by_name(name, exclude_profile_id=None)`/
+    inchangées) n'est plus migrée automatiquement vers un profil depuis le
+    2026-08-04 (voir suppression de `migrate_legacy_files()` ci-dessus) :
+    une clé enregistrée sous cette ancienne entrée par une très vieille
+    installation, jamais relancée depuis l'ajout des profils multiples,
+    y reste sans être reprise. `find_profile_by_name(name, exclude_profile_id=None)`/
     `find_profile_by_api_key(api_key, exclude_profile_id=None)` (ajoutées le
     2026-07-22) cherchent un profil existant de même nom, ou de même clé réelle
     (relue via keyring, pas un hash) qu'une valeur candidate ; utilisées par
@@ -189,20 +250,6 @@ sauvegarde JSON et/ou export PDF.
     fiche actuellement ouverte si elle en a un. Le dossier est mémorisé à
     chaque sauvegarde/chargement/choix réussi, pas seulement au premier
     usage.
-  - `_merge_legacy_settings_files()` (appelée par `migrate_legacy_files()`,
-    y compris en développement contrairement au reste de cette fonction,
-    ces anciens fichiers vivant déjà dans `%APPDATA%\Distillat` dans les deux
-    modes) : fusionne dans `settings.json` les anciens `last_dirs.json` et
-    `prompts.json` (chacun dans son propre fichier avant leur regroupement
-    en un seul `settings.json`, le 2026-07-20), s'ils existent encore, sans
-    jamais écraser une clé déjà présente dans `settings.json` ; supprime
-    l'ancien fichier une fois sa fusion effectuée avec succès, via
-    `send2trash()` (bibliothèque `send2trash`) plutôt qu'un `unlink()`
-    définitif, pour qu'un fichier supprimé par erreur reste récupérable
-    depuis la corbeille Windows (changement du 2026-07-21, qui s'applique
-    à toute suppression de fichier faite par l'application ; voir aussi
-    `generation_resume.clear_resume_state()`).
-
 - **`app/instance_lock.py`** (ajouté le 2026-07-22) : verrous
   inter-instances, pour permettre de lancer plusieurs instances de Distillat
   en parallèle (une clé différente chacune, usage régulier prévu par
@@ -287,6 +334,21 @@ sauvegarde JSON et/ou export PDF.
   déverrouillé entre les deux. Voir aussi le paragraphe dédié dans
   `MainWindow` plus bas pour `pending_resumes_button` et le message
   `"resumes_changed"` diffusé sur le canal `QLocalServer`/`QLocalSocket`.
+
+  Verrou de réservation d'ouverture (`acquire_open_target_lock(pid)`/
+  `release_open_target_lock(pid)`, ajouté avec l'ouverture par double-clic
+  d'un `.dstl`, fichier `.open_target_lock_<pid>.json`) : même mécanique que
+  les deux verrous ci-dessus, mais réserve non pas une ressource applicative
+  (profil, livre) mais le droit exclusif, pour un process candidat de
+  `main.py`, d'interroger puis éventuellement de router un fichier vers
+  l'instance de ce PID. Pris juste avant d'envoyer `"is_empty?"` sur son
+  canal `QLocalServer`, relâché aussitôt après (que la réponse soit
+  `"empty"`, `"busy"`, ou un timeout) : empêche deux fichiers `.dstl`
+  ouverts en rafale de cibler la même instance vide en même temps, ce qui
+  aurait pu lui faire recevoir deux chemins différents avec un résultat final
+  dépendant de l'ordre d'arrivée. Voir la logique complète dans `main.py`
+  ci-dessus et le protocole `"is_empty?"`/`"open_report:<chemin>"` du canal,
+  détaillé dans la section `MainWindow` plus bas.
 
   Mécanisme distinct (ajouté le 2026-07-22 avec le bouton "nouvelle
   instance" du header de `MainWindow`, à droite du titre) : comptage des
@@ -1065,9 +1127,9 @@ sauvegarde JSON et/ou export PDF.
   profil résolu). `_migrate_legacy_global_prompts_to_profile(profile_id)`
   reprend l'ancienne personnalisation globale (stockée sous l'ancienne clé
   `"prompts"`, avant l'introduction des profils multiples) dans le PREMIER
-  profil qui la consulte ou la modifie (typiquement le profil "Défaut" issu
-  de la migration de la clé API unique, voir
-  `config._migrate_legacy_api_key_to_profile()`), puis VIDE aussitôt
+  profil qui la consulte ou la modifie (typiquement le profil "Défaut" créé
+  manuellement par l'utilisateur, la migration automatique depuis
+  l'ancienne clé API unique n'existant plus depuis le 2026-08-04), puis VIDE aussitôt
   l'ancienne clé `"prompts"` globale (`save_settings({"prompts_by_profile":
   ..., "prompts": {}})`) : cette migration ne doit s'appliquer qu'une seule
   fois tous profils confondus, jamais par profil - la vider empêche qu'un
@@ -1267,7 +1329,7 @@ sauvegarde JSON et/ou export PDF.
 
 - **`app/book_report.py`** (`BookReport`, `Character`) : structure de données
   centrale de la fiche + sérialisation JSON (`to_json`/`from_json`/`save`/`load`,
-  `FILE_FORMAT_VERSION = 2`). `extra_generated_text` existe uniquement en
+  `FILE_FORMAT_VERSION = 3`). `extra_generated_text` existe uniquement en
   mémoire (jamais persisté, ni JSON ni PDF) : contenu superflu généré par
   Gemini, à la disposition de l'utilisateur via l'UI mais pas de la fiche.
   `missing_fields` (ajouté le 2026-08-01, même philosophie que
@@ -1277,6 +1339,25 @@ sauvegarde JSON et/ou export PDF.
   juste après affichage de la fiche - voir `app/gemini_client.py` ci-dessous
   pour le détail du changement de comportement (fiche partielle affichée au
   lieu d'un rejet total).
+  `ai_model` (ajouté avec le passage à `FILE_FORMAT_VERSION = 3`, contrairement
+  aux deux champs ci-dessus persisté dans le JSON) porte le nom du modèle
+  Gemini ayant généré la fiche (ex. `"gemini-2.5-flash"`), renseigné aux deux
+  sites de construction de `BookReport` dans `generate_book_report()`
+  (`app/gemini_client.py`, paramètre `model` déjà disponible aux deux
+  `return BookReport(...)`) : simple mention de transparence sur l'origine IA
+  du contenu (jamais présentée comme une certification légale type C2PA),
+  affichée en pied de page par `pdf_export.export_book_report_to_pdf()` si non
+  vide. Chaîne vide (`""`, jamais `None`) pour une fiche antérieure à ce champ
+  ou de provenance inconnue - `from_json()` retombe sur `data.get("ai_model", "")`,
+  même logique de compatibilité ascendante que `detailed_summary_text`.
+  `ensure_ai_model_mentioned()` renseigne `ai_model` avec la mention générique
+  `tr("book_report.legacy_ai_model")` ("Gemini (modèle exact non
+  enregistré)") si vide, et retourne `True` dans ce cas (`False` si le champ
+  était déjà renseigné, pour signaler à l'appelant si une réécriture du
+  fichier est nécessaire) : appelée lors de la migration `.distillat.json`
+  -> `.dstl` (voir section dédiée ci-dessous), pour qu'aucune fiche produite
+  par Distillat ne reste sans mention d'origine IA une fois migrée, même une
+  fiche générée avant l'ajout de ce champ.
   `from_json()`/`load()` ne réécrivent jamais le fichier source (même si la
   couverture est recompressée au passage, en mémoire uniquement) : une
   simple lecture ne doit jamais modifier le fichier lu. La couverture base64
@@ -1284,7 +1365,7 @@ sauvegarde JSON et/ou export PDF.
   caractères, soit ~15 Mo décodés - très au-dessus de toute couverture
   légitime) avant décodage : au-delà, elle est ignorée et la fiche se charge
   sans couverture plutôt que de décoder en mémoire le blob démesuré d'un
-  fichier `.distillat.json` piégé ou corrompu (audit de sécurité du
+  fichier `.dstl` (ou l'ancien `.distillat.json`) piégé ou corrompu (audit de sécurité du
   2026-07-22), même philosophie que `shrink_cover_image()` (une couverture
   inutilisable ne fait jamais échouer le chargement).
   `sanitize_filename()` nettoie un titre de livre pour en faire un nom de
@@ -1300,6 +1381,55 @@ sauvegarde JSON et/ou export PDF.
   initialisée) pour un nom réservé Windows (`CON`, `NUL`, `COM1`...) ou se
   terminant par un point/espace après nettoyage.
 
+### Migration `.distillat.json` -> `.dstl`
+
+Extension des fiches changée de `.distillat.json` à `.dstl` (plus courte),
+sans changement du format JSON lui-même (mêmes clés, même mécanique de
+sérialisation), si ce n'est le complément de `ai_model` décrit plus bas.
+L'ancien format reste reconnu indéfiniment en lecture
+(`main_window.LEGACY_REPORT_EXTENSION`), migré vers le nouveau via deux
+mécanismes complémentaires, tous deux dans `app/main_window.py` :
+- **Au fil de l'eau** : `_load_report_from_path()` détecte une fiche ouverte
+  (chargement ou glisser-déposer) sous l'ancien nom et appelle
+  `_migrate_legacy_report(legacy_path, result)` (`result` : l'objet
+  `BookReport` déjà chargé), qui la renomme sur place (`Path.rename`, jamais
+  de perte si la cible est inaccessible : le chemin d'origine reste utilisé
+  et un avertissement est affiché plutôt que de bloquer le chargement),
+  informe l'utilisateur par popup, puis propose `_offer_bulk_migration()`.
+- **En masse, sur confirmation explicite** : `_offer_bulk_migration()` pose
+  la question oui/non (jamais automatique sans accord explicite), fait
+  choisir un dossier via `QFileDialog.getExistingDirectory` (pré-rempli avec
+  le dossier de la fiche qui vient d'être migrée), puis parcourt
+  récursivement (`Path.rglob`) tous les `*.distillat.json` du dossier choisi
+  pour les renommer en `.dstl`. Ne jamais écraser un `.dstl` déjà existant du
+  même nom (comptabilisé comme erreur dans le résumé final plutôt qu'écrasé
+  silencieusement).
+
+Les deux mécanismes appellent aussi `BookReport.ensure_ai_model_mentioned()`
+sur chaque fiche renommée avec succès, et réenregistrent le fichier `.dstl`
+si le champ vient d'être complété (voir la section `book_report.py`
+ci-dessus) : la migration d'extension est le meilleur moment pour garantir
+que toute fiche produite par Distillat porte une mention d'origine IA, même
+approximative pour les fiches générées avant l'ajout de ce champ. Côté
+migration en masse, une fiche dont le JSON ne peut pas être relu/réécrit
+après le renommage (fichier corrompu, erreur disque) reste comptée en succès
+pour le renommage lui-même : seule la complétion de `ai_model` échoue
+silencieusement dans ce cas, sans jamais faire remonter d'erreur au résumé
+final ni annuler le renommage déjà effectué.
+
+`config.copy_sample_reports()` applique le même principe anti-doublon pour
+les fiches d'exemple : si l'utilisateur possède déjà `X.distillat.json` mais
+pas encore `X.dstl` côté `get_reports_dir()`, elle renomme l'existant plutôt
+que de copier une nouvelle fois depuis la source (qui distribue désormais ses
+fiches d'exemple en `.dstl`), pour ne jamais aboutir à un doublon de la même
+fiche d'exemple sous les deux extensions.
+
+Les deux fiches d'exemple du dossier `Fiches/` du projet portent un `ai_model`
+qui mentionne explicitement Claude (Anthropic), pas Gemini : leur contenu a
+été rédigé manuellement comme démonstration, jamais généré via l'API Gemini
+de Distillat - `ai_model` reflète honnêtement cette origine plutôt que de
+laisser croire à une génération réelle.
+
 - **`app/pdf_export.py`** : export de la fiche en PDF via ReportLab (pas de
   dépendance système, contrairement à WeasyPrint). Style éditorial
   navy/gold : bandeaux de titre de section (`_TagHeading`), lettrine
@@ -1309,10 +1439,41 @@ sauvegarde JSON et/ou export PDF.
   `### `/`## `/`# ` devient un titre stylé, tout le reste est un paragraphe de
   corps (le tout premier reçoit la lettrine). Couverture = première page du
   PDF source si présente. Un chapitre par `PageBreak`.
+  `_footer_factory(book_title)` dessine le pied de page (`onLaterPages`,
+  absent de la première page) : nom du livre à gauche, numéro de page à
+  droite - inchangé depuis l'ajout de `BookReport.ai_model` (voir ci-dessus).
+  La mention IA n'apparaît jamais dans le contenu visible du PDF : elle est
+  passée en métadonnées du document via le paramètre `keywords=` de
+  `SimpleDocTemplate` dans `export_book_report_to_pdf()`
+  (`tr("pdf_export.ai_generated_keywords", model=result.ai_model)` si
+  `ai_model` n'est pas vide, chaîne vide sinon), propriété PDF standard
+  `/Keywords` consultable via les propriétés du fichier dans un lecteur PDF,
+  jamais imprimée ni affichée à la lecture du document.
+
+  ReportLab n'écrit que le dictionnaire `/Info` classique (titre, auteur,
+  mots-clés ci-dessus), lisible par `pypdf`/Adobe Acrobat mais jamais affiché
+  par l'onglet Détails des propriétés Windows (Explorateur), qui ne lit que
+  les métadonnées **XMP** (bloc XML/RDF séparé, absent des PDF ReportLab par
+  défaut) - constaté en conditions réelles : Titre, Auteurs et Mots clés
+  restaient vides dans cette fenêtre alors que `pypdf` les lisait
+  correctement dans le même fichier. `export_book_report_to_pdf()` rouvre
+  donc le PDF juste après `document.build(...)` avec **pikepdf** (bibliothèque
+  basée sur qpdf, wheels Windows autonomes) : `pdf.open_metadata()` (context
+  manager) puis assignation de `dc:title`/`dc:creator`/`pdf:Keywords` (mêmes
+  valeurs que le `/Info` déjà écrit, `pdf:Keywords` omis si `ai_model` est
+  vide), `pdf.save(output_path, ...)` avec `allow_overwriting_input=True`
+  (nécessaire pour réécrire le chemin qu'on vient d'ouvrir). Le `/Info`
+  classique n'est ni retiré ni modifié : XMP s'ajoute en plus, les deux
+  systèmes coexistent. Toute erreur pikepdf est absorbée silencieusement
+  (`try/except Exception: pass`) : le PDF de base, avec `/Info` déjà correct,
+  existe déjà à ce stade et reste utilisable même si l'ajout XMP échoue -
+  jamais bloquant pour l'export dans son ensemble. Aucun PDF déjà généré
+  n'est jamais retouché après coup : l'écriture XMP fait partie de la même
+  passe d'export que la génération initiale.
 
 - **`app/main_window.py`** (le plus gros fichier, ~1700 lignes) : toute l'UI.
   - `MainWindow` : fenêtre principale, zone de glisser-déposer (`DropZone`,
-    accepte EPUB/PDF à résumer ou `.distillat.json` à recharger), sélecteur de
+    accepte EPUB/PDF à résumer ou `.dstl`/`.distillat.json` à recharger), sélecteur de
     langue (`QComboBox` dans l'en-tête, voir `app/i18n.py`) et rappel discret
     sous l'en-tête indiquant la langue de sortie des fiches générées
     (`output_language_hint_label`), boutons de gestion de fiche
@@ -1476,6 +1637,24 @@ sauvegarde JSON et/ou export PDF.
       néanmoins en place, à un intervalle bien plus large (15 s) : il ne sert
       plus que de filet de secours pour l'unique cas non couvert par ce
       canal, une instance injoignable au moment de la diffusion.
+    - Deux derniers messages, ajoutés avec l'ouverture par double-clic d'un
+      `.dstl` (voir `main.py` ci-dessus) : `"is_empty?"`, envoyé par un
+      process candidat pour savoir si cette instance est un écran d'accueil
+      libre - `_on_instance_message()` répond alors immédiatement
+      `b"empty"`/`b"busy"` **sur ce même socket** (seul cas du canal avec
+      réponse synchrone, tous les autres messages étant fire-and-forget)
+      selon `_is_empty_state()` (`selected_book_path`, `last_result`,
+      `worker` et `_selection_locked_book_hash` tous à `None`), puis appelle
+      `socket.disconnectFromServer()` explicitement plutôt que d'attendre la
+      fermeture naturelle du socket par l'émetteur. Et
+      `f"open_report:{path}"`, envoyé une fois qu'un process candidat a reçu
+      `"empty"` : l'instance qui le reçoit appelle directement
+      `self._load_report_from_path(path)` (même méthode que le chargement
+      manuel, migration `.distillat.json` -> `.dstl` incluse) puis se met au
+      premier plan (`self.raise_()`/`self.activateWindow()`). Aucune
+      confirmation de perte de fiche non sauvegardée n'est nécessaire ici :
+      le message n'est envoyé qu'après confirmation `"empty"` par le sondage,
+      donc rien à perdre côté de cette instance.
   - Dialogues : `ProfilesDialog` (gestion des profils de clé API - ajout,
     renommage, modification de la clé, suppression, sélection du profil
     actif de cette instance via le bouton "Utiliser" ; remplace l'ancien

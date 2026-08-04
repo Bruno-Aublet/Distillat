@@ -8,7 +8,7 @@ from pathlib import Path
 from app.cover_image import shrink_cover_image
 from app.i18n import tr
 
-FILE_FORMAT_VERSION = 2
+FILE_FORMAT_VERSION = 3
 
 # Caractères réellement interdits par Windows dans un nom de fichier, plus
 # les caractères de contrôle (0x00-0x1F). Tout le reste est autorisé, y
@@ -76,6 +76,11 @@ class BookReport:
     # main_window._on_finished_ok), jamais persisté ni rechargé, puisque la
     # fiche elle-même (vide ou complétée depuis) fait foi une fois sauvegardée.
     missing_fields: list[str] = field(default_factory=list)
+    # Nom du modèle Gemini ayant généré cette fiche (ex: "gemini-2.5-flash"),
+    # mention de transparence sur l'origine IA du contenu (jamais présentée
+    # comme une certification légale). Chaîne vide pour une fiche antérieure
+    # à ce champ ou de provenance inconnue.
+    ai_model: str = ""
 
     def to_json(self) -> str:
         data = {
@@ -89,6 +94,7 @@ class BookReport:
             "cover_image_base64": (
                 base64.b64encode(self.cover_image).decode("ascii") if self.cover_image else None
             ),
+            "ai_model": self.ai_model,
         }
         return json.dumps(data, ensure_ascii=False, indent=2)
 
@@ -118,7 +124,24 @@ class BookReport:
             ],
             analysis_text=data.get("analysis_text", ""),
             cover_image=cover_image,
+            # absent des fiches sauvegardées avant l'ajout de la mention de transparence IA (format v3)
+            ai_model=data.get("ai_model", ""),
         )
+
+    def ensure_ai_model_mentioned(self) -> bool:
+        """Renseigne ai_model avec une mention générique
+        (book_report.legacy_ai_model) si vide : appelée lors de la migration
+        d'une fiche .distillat.json vers .dstl (voir
+        main_window._migrate_legacy_report()/_offer_bulk_migration()), pour
+        que toute fiche produite par Distillat porte une mention de son
+        origine IA une fois migrée, même une fiche générée avant l'ajout de
+        ce champ (où le modèle exact n'a jamais été enregistré). Retourne
+        True si le champ vient d'être renseigné (donc si la fiche doit être
+        réenregistrée), False s'il l'était déjà."""
+        if self.ai_model:
+            return False
+        self.ai_model = tr("book_report.legacy_ai_model")
+        return True
 
     def save(self, path: Path) -> None:
         path.write_text(self.to_json(), encoding="utf-8")
@@ -132,4 +155,4 @@ class BookReport:
         fichier source (EPUB/PDF, sans extension) quand il est connu, sinon
         replié sur le titre du livre (ex: fiche rechargée depuis un JSON)."""
         base = source_stem or self.book_title
-        return f"{sanitize_filename(base)}.distillat.json"
+        return f"{sanitize_filename(base)}.dstl"

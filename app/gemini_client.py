@@ -1614,6 +1614,7 @@ def _generate_book_report_impl(
                 was_split=was_split,
                 chapter_count=chapter_count,
                 missing_fields=missing_fields,
+                ai_model=model,
             )
 
         _log_api_call(
@@ -1702,4 +1703,5 @@ def _generate_book_report_impl(
         was_split=was_split,
         chapter_count=chapter_count,
         missing_fields=missing_fields,
+        ai_model=model,
     )

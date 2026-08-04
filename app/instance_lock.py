@@ -240,6 +240,26 @@ def release_book_lock(book_hash: str) -> None:
     _release_lock(_book_lock_path(book_hash))
 
 
+def _open_target_lock_path(pid: int) -> Path:
+    return config.get_settings_dir() / f".open_target_lock_{pid}.json"
+
+
+def acquire_open_target_lock(pid: int) -> bool:
+    """Réserve le droit exclusif de router un fichier .dstl vers l'instance
+    de ce PID, le temps de l'interroger (message "is_empty?" sur son canal
+    QLocalServer, voir main_window.py) et de lui transmettre le chemin le cas
+    échéant. Empêche deux process lancés par deux doubles-clics presque
+    simultanés sur des fichiers .dstl de cibler la même instance vide en même
+    temps (voir main.py) : sans ce verrou, les deux pourraient recevoir
+    "empty" et lui envoyer chacun un chemin différent, avec un résultat final
+    dépendant de l'ordre d'arrivée."""
+    return _acquire_lock(_open_target_lock_path(pid))
+
+
+def release_open_target_lock(pid: int) -> None:
+    _release_lock(_open_target_lock_path(pid))
+
+
 def _instance_marker_path(pid: int) -> Path:
     return config.get_settings_dir() / f".instance_{pid}.json"
 

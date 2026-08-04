@@ -1,11 +1,12 @@
 """Export de la fiche de livre en PDF via ReportLab (pur pip, aucune
 dépendance système - contrairement à WeasyPrint qui exige Pango/GTK).
 
-Dépendance : pip install reportlab
+Dépendances : pip install reportlab pikepdf
 """
 import io
 import os
 
+import pikepdf
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import A4
@@ -344,6 +345,14 @@ def export_book_report_to_pdf(result: BookReport, output_path: str) -> None:
         bottomMargin=MARGIN_BOTTOM,
         title=result.book_title,
         author=result.author,
+        # Mention de transparence sur l'origine IA du contenu dans les
+        # métadonnées du document (propriété standard /Keywords, jamais
+        # affichée dans le contenu visible du PDF), consultable via les
+        # propriétés du fichier dans un lecteur PDF. Absente si ai_model est
+        # vide (fiche pour laquelle le modèle n'est pas connu).
+        keywords=(
+            tr("pdf_export.ai_generated_keywords", model=result.ai_model) if result.ai_model else ""
+        ),
     )
 
     story = []
@@ -394,3 +403,22 @@ def export_book_report_to_pdf(result: BookReport, output_path: str) -> None:
 
     footer = _footer_factory(result.book_title)
     document.build(story, onFirstPage=lambda c, d: None, onLaterPages=footer)
+
+    # ReportLab n'écrit que le dictionnaire /Info classique (title=/author=/
+    # keywords= ci-dessus), lisible par pypdf ou Adobe Acrobat mais jamais
+    # affiché par l'onglet Détails de l'Explorateur Windows, qui ne lit que
+    # les métadonnées XMP (bloc XML/RDF séparé). pikepdf rouvre ici le PDF
+    # tout juste généré pour y ajouter ce bloc XMP en plus (le /Info n'est ni
+    # retiré ni modifié), avec les mêmes valeurs, pour que Titre/Auteurs/Mots
+    # clés apparaissent enfin dans Windows. Jamais de retouche d'un PDF déjà
+    # remis à l'utilisateur : uniquement dans cette même passe d'export.
+    try:
+        with pikepdf.open(output_path, allow_overwriting_input=True) as pdf:
+            with pdf.open_metadata() as meta:
+                meta["dc:title"] = result.book_title
+                meta["dc:creator"] = [result.author]
+                if result.ai_model:
+                    meta["pdf:Keywords"] = tr("pdf_export.ai_generated_keywords", model=result.ai_model)
+            pdf.save(output_path)
+    except Exception:  # noqa: BLE001 - le PDF de base (/Info correct) existe déjà, jamais bloquant
+        pass

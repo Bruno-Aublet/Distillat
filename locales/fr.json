@@ -4,7 +4,8 @@
     "unknown_author": "Auteur inconnu"
   },
   "book_report": {
-    "fallback_filename": "livre"
+    "fallback_filename": "livre",
+    "legacy_ai_model": "Gemini (modèle exact non enregistré)"
   },
   "epub_parser": {
     "fallback_chapter_title": "Chapitre {index}",
@@ -21,7 +22,8 @@
     "summary_heading": "Résumé court",
     "detailed_summary_heading": "Résumé détaillé",
     "characters_heading": "Personnages principaux",
-    "analysis_heading": "Analyse littéraire"
+    "analysis_heading": "Analyse littéraire",
+    "ai_generated_keywords": "Contenu généré par intelligence artificielle, modèle : {model}"
   },
   "gemini_errors": {
     "daily_quota_exceeded": "Le quota quotidien de requêtes Gemini est épuisé pour aujourd'hui. Il se réinitialise à minuit, heure du Pacifique (Californie), soit en général en matinée en France. (erreur 429 : quota quotidien dépassé)",
@@ -178,10 +180,10 @@
     }
   },
   "drop_zone": {
-    "prompt": "Glissez-déposez un fichier EPUB, PDF ou une fiche .distillat.json ici<br>ou cliquez pour parcourir",
+    "prompt": "Glissez-déposez un fichier EPUB, PDF ou une fiche .dstl ici<br>ou cliquez pour parcourir",
     "busy": "Résumé en cours...<br>Glissez-déposez un nouveau fichier une fois terminé",
     "file_dialog_title": "Choisir un fichier EPUB, PDF ou une fiche",
-    "file_dialog_filter": "Tous les formats pris en charge (*.epub *.pdf *.distillat.json);;Fichiers EPUB/PDF (*.epub *.pdf);;Fiches Distillat (*.distillat.json)"
+    "file_dialog_filter": "Tous les formats pris en charge (*.epub *.pdf *.dstl *.distillat.json);;Fichiers EPUB/PDF (*.epub *.pdf);;Fiches Distillat (*.dstl *.distillat.json)"
   },
   "pending_resumes_dialog": {
     "window_title": "Livre(s) en attente de reprise",
@@ -270,7 +272,7 @@
     "pdf_saved_message": "Document enregistré :\n{path}",
     "save_error_title": "Erreur de sauvegarde",
     "save_report_dialog_title": "Enregistrer la fiche",
-    "save_report_filter": "Fiches Distillat (*.json)",
+    "save_report_filter": "Fiches Distillat (*.dstl)",
     "existing_file_title": "Fichier existant",
     "existing_file_message": "Le fichier existe déjà :\n{path}\n\nVoulez-vous le remplacer ?",
     "yes": "Oui",
@@ -278,10 +280,16 @@
     "report_overwritten_message": "La fiche a été correctement modifiée.",
     "report_saved_message": "Fiche enregistrée :\n{path}",
     "load_report_dialog_title": "Charger une fiche",
-    "load_report_filter": "Fiches Distillat (*.json)",
+    "load_report_filter": "Fiches Distillat (*.dstl *.distillat.json)",
     "load_error_title": "Erreur de chargement",
     "load_error_message": "Fichier illisible : {error}",
     "report_loaded_status": "Fiche chargée depuis {filename}.",
+    "report_migrated_message": "Cette fiche utilisait l'ancienne extension .distillat.json. Elle vient d'être automatiquement convertie en {filename}.",
+    "report_migration_rename_error": "Cette fiche utilise l'ancienne extension .distillat.json et n'a pas pu être automatiquement convertie en .dstl ({error}). Elle reste utilisable telle quelle.",
+    "bulk_migration_question": "Voulez-vous migrer tous vos fichiers .distillat.json vers le nouveau format .dstl ?",
+    "bulk_migration_dialog_title": "Choisir le dossier à migrer",
+    "bulk_migration_summary_success": "{count} fiche(s) migrée(s) avec succès vers le format .dstl.",
+    "bulk_migration_summary_with_errors": "{success_count} fiche(s) migrée(s) avec succès vers le format .dstl.\n{error_count} fiche(s) n'ont pas pu être migrée(s) :\n{errors}",
     "unsaved_report_dialog": {
       "window_title": "Fiche non sauvegardée",
       "text": "La fiche actuelle n'a pas été sauvegardée. Voulez-vous continuer sans sauvegarder ?",

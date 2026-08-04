@@ -955,13 +955,26 @@ class PromptsDialog(QDialog):
 
 
 SUPPORTED_EXTENSIONS = (".epub", ".pdf")
-REPORT_EXTENSION = ".distillat.json"
-DROPPABLE_EXTENSIONS = SUPPORTED_EXTENSIONS + (REPORT_EXTENSION,)
+REPORT_EXTENSION = ".dstl"
+# Ancienne extension des fiches (avant la migration vers .dstl) : toujours
+# reconnue en lecture pour ne jamais casser les fiches existantes des
+# utilisateurs, mais plus jamais utilisée en écriture (voir _load_report_from_path
+# qui migre automatiquement chaque fiche ouverte sous cette extension).
+LEGACY_REPORT_EXTENSION = ".distillat.json"
+DROPPABLE_EXTENSIONS = SUPPORTED_EXTENSIONS + (REPORT_EXTENSION, LEGACY_REPORT_EXTENSION)
+
+
+def _is_report_path(path: str) -> bool:
+    """True si le chemin correspond à une fiche Distillat, format actuel
+    (.dstl) ou ancien format encore reconnu en lecture (.distillat.json)."""
+    lower_path = path.lower()
+    return lower_path.endswith(REPORT_EXTENSION) or lower_path.endswith(LEGACY_REPORT_EXTENSION)
 
 
 class DropZone(QLabel):
     """Zone de glisser-déposer pour les fichiers EPUB/PDF (à résumer) et les
-    fiches Distillat déjà générées (.distillat.json, à ouvrir directement)."""
+    fiches Distillat déjà générées (.dstl, ou l'ancien format .distillat.json
+    encore reconnu, à ouvrir directement)."""
 
     _ICON_HTML = None  # balise <img> en data URI, construite une fois au premier usage
 
@@ -1043,7 +1056,7 @@ class DropZone(QLabel):
         for url in urls:
             path = url.toLocalFile()
             lower_path = path.lower()
-            if lower_path.endswith(REPORT_EXTENSION):
+            if _is_report_path(path):
                 event.acceptProposedAction()
                 # Le traitement réel (qui peut ouvrir un QMessageBox modal via
                 # _confirm_discard_unsaved_report) est différé après la fin du
@@ -1071,7 +1084,7 @@ class DropZone(QLabel):
         if not path:
             return
         config.save_last_book_dir(Path(path).parent)
-        if path.lower().endswith(REPORT_EXTENSION):
+        if _is_report_path(path):
             self.on_report_dropped(path)
         else:
             self.on_file_dropped(path)
@@ -1324,7 +1337,7 @@ class PendingResumesDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, initial_report_path: str | None = None):
         super().__init__()
         self.setWindowTitle(tr("main_window.window_title", version=VERSION))
         # Sans ceci, Qt calcule automatiquement une taille minimale à partir
@@ -1433,6 +1446,8 @@ class MainWindow(QMainWindow):
         self._quota_refresh_timer.start()
 
         self._build_ui()
+        if initial_report_path is not None:
+            self._load_report_from_path(initial_report_path)
         self._update_quota_display(self.quota_tracker.snapshot())
         check_for_updates_on_startup(self)
         # Le bouton "nouvelle instance" démarre désactivé (voir _build_ui()),
@@ -2128,7 +2143,13 @@ class MainWindow(QMainWindow):
         toujours en un seul bloc, pas besoin d'accumulation entre plusieurs
         readyRead. Un contenu inattendu est ignoré sans effet, pour qu'un
         éventuel process tiers qui se connecterait par erreur au canal ne
-        puisse pas dérégler l'état du bouton."""
+        puisse pas dérégler l'état du bouton.
+
+        "is_empty?" et "open_report:<chemin>" font partie du routage d'un
+        fichier .dstl ouvert par double-clic (voir main.py) : un nouveau
+        process candidat interroge d'abord chaque instance vivante pour
+        trouver un écran d'accueil libre avant, éventuellement, de lui
+        transmettre le chemin à charger."""
         message = bytes(socket.readAll()).decode("utf-8", errors="replace").strip()
         if message == "starting":
             self.new_instance_button.setEnabled(False)
@@ -2136,6 +2157,29 @@ class MainWindow(QMainWindow):
             self.new_instance_button.setEnabled(True)
         elif message == "resumes_changed":
             self._refresh_pending_resumes_button()
+        elif message == "is_empty?":
+            reply = b"empty" if self._is_empty_state() else b"busy"
+            socket.write(reply)
+            socket.flush()
+            socket.disconnectFromServer()
+        elif message.startswith("open_report:"):
+            path = message[len("open_report:"):]
+            self._load_report_from_path(path)
+            self.raise_()
+            self.activateWindow()
+
+    def _is_empty_state(self) -> bool:
+        """True si cette instance est un écran d'accueil strict : rien
+        sélectionné, rien affiché, aucune génération en cours, aucune reprise
+        en attente sélectionnée. Utilisé pour router vers cette instance un
+        fichier .dstl ouvert par double-clic ailleurs (voir main.py) plutôt
+        que d'ouvrir une nouvelle fenêtre."""
+        return (
+            self.selected_book_path is None
+            and self.last_result is None
+            and self.worker is None
+            and self._selection_locked_book_hash is None
+        )
 
     def _send_instance_message(self, pid: int, message: str) -> None:
         """Envoie un message ("starting" ou "ready") au canal de l'instance
@@ -3055,14 +3099,121 @@ class MainWindow(QMainWindow):
             )
             return
 
+        loaded_path = Path(path)
+        if loaded_path.name.lower().endswith(LEGACY_REPORT_EXTENSION):
+            loaded_path = self._migrate_legacy_report(loaded_path, result)
+
         self.last_result = result
-        self._last_result_source_stem = Path(path).stem.removesuffix(".distillat")
-        self._last_report_source_path = Path(path)
+        self._last_result_source_stem = loaded_path.stem.removesuffix(".distillat")
+        self._last_report_source_path = loaded_path
         self._report_dirty = False
         config.save_last_report_dir(self._last_report_source_path.parent)
         self._display_book_report(result)
-        self.status_label.setText(tr("main_window.report_loaded_status", filename=os.path.basename(path)))
+        self.status_label.setText(tr("main_window.report_loaded_status", filename=os.path.basename(str(loaded_path))))
         self.extra_text_label.hide()
         self.save_button.setEnabled(True)
         self.save_report_button.setEnabled(True)
         self.close_report_button.setEnabled(True)
+
+    def _migrate_legacy_report(self, legacy_path: Path, result: BookReport) -> Path:
+        """Renomme sur place une fiche ouverte sous l'ancienne extension
+        .distillat.json vers .dstl, informe l'utilisateur, puis lui propose
+        de migrer en une fois tous ses fichiers .distillat.json. Retourne le
+        nouveau chemin en cas de succès, ou le chemin d'origine inchangé si
+        le renommage a échoué (fichier verrouillé/lecture seule) : le
+        chargement de la fiche n'est jamais bloqué par cet échec.
+
+        Complète aussi au passage la mention IA (result.ai_model) si cette
+        fiche est antérieure à l'ajout de ce champ, et réenregistre le
+        fichier .dstl fraîchement renommé dans ce cas : la migration
+        d'extension est le meilleur moment pour que toute fiche produite par
+        Distillat porte cette mention, même approximative (voir
+        BookReport.ensure_ai_model_mentioned())."""
+        base_name = legacy_path.name[: -len(LEGACY_REPORT_EXTENSION)]
+        new_path = legacy_path.with_name(f"{base_name}{REPORT_EXTENSION}")
+        try:
+            legacy_path.rename(new_path)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                tr("main_window.warning_title"),
+                tr("main_window.report_migration_rename_error", error=exc),
+            )
+            return legacy_path
+
+        if result.ensure_ai_model_mentioned():
+            try:
+                result.save(new_path)
+            except OSError:
+                pass
+
+        QMessageBox.information(
+            self,
+            tr("main_window.save_success_title"),
+            tr("main_window.report_migrated_message", filename=new_path.name),
+        )
+        self._offer_bulk_migration(new_path.parent)
+        return new_path
+
+    def _offer_bulk_migration(self, default_dir: Path) -> None:
+        """Propose à l'utilisateur de migrer en une fois tous les fichiers
+        .distillat.json d'un dossier (et ses sous-dossiers) vers .dstl."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(tr("main_window.save_success_title"))
+        box.setText(tr("main_window.bulk_migration_question"))
+        yes_button = box.addButton(tr("main_window.yes"), QMessageBox.YesRole)
+        box.addButton(tr("main_window.no"), QMessageBox.NoRole)
+        box.setDefaultButton(yes_button)
+        box.exec_()
+        if box.clickedButton() is not yes_button:
+            return
+
+        chosen_dir = QFileDialog.getExistingDirectory(
+            self, tr("main_window.bulk_migration_dialog_title"), str(default_dir)
+        )
+        if not chosen_dir:
+            return
+
+        success_count = 0
+        errors: list[str] = []
+        for legacy_file in Path(chosen_dir).rglob(f"*{LEGACY_REPORT_EXTENSION}"):
+            base_name = legacy_file.name[: -len(LEGACY_REPORT_EXTENSION)]
+            target = legacy_file.with_name(f"{base_name}{REPORT_EXTENSION}")
+            if target.exists():
+                errors.append(str(legacy_file))
+                continue
+            try:
+                legacy_file.rename(target)
+                success_count += 1
+            except OSError:
+                errors.append(str(legacy_file))
+                continue
+            # Complète aussi la mention IA (voir _migrate_legacy_report()) :
+            # une erreur de lecture/écriture ici ne remet pas en cause le
+            # renommage déjà compté en succès, la fiche reste utilisable,
+            # simplement sans cette mention ajoutée après coup.
+            try:
+                migrated_report = BookReport.load(target)
+                if migrated_report.ensure_ai_model_mentioned():
+                    migrated_report.save(target)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                pass
+
+        if errors:
+            QMessageBox.warning(
+                self,
+                tr("main_window.warning_title"),
+                tr(
+                    "main_window.bulk_migration_summary_with_errors",
+                    success_count=success_count,
+                    error_count=len(errors),
+                    errors="\n".join(errors),
+                ),
+            )
+        else:
+            QMessageBox.information(
+                self,
+                tr("main_window.save_success_title"),
+                tr("main_window.bulk_migration_summary_success", count=success_count),
+            )

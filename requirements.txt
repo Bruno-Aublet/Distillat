@@ -7,6 +7,7 @@ pypdf==6.14.2
 pypdfium2==5.12.1
 pillow==12.3.0
 reportlab==5.0.0
+pikepdf==10.11.0
 keyring==25.7.0
 send2trash==2.1.0
 packaging==26.2

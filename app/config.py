@@ -3,18 +3,18 @@ d'identification Windows, par le module keyring - jamais en clair sur disque),
 et des emplacements de stockage persistants (indépendants du dossier de
 l'application, pour ne pas perdre ces données si l'utilisateur
 supprime/remplace le dossier de l'exe)."""
+import ctypes
 import json
 import msvcrt
 import os
 import shutil
 import sys
-import uuid
+import winreg
 from contextlib import contextmanager
 from pathlib import Path
 
 import keyring
 from keyring.errors import KeyringError
-from send2trash import send2trash
 
 APP_FOLDER_NAME = "Distillat"
 KEYRING_SERVICE_NAME = "Distillat"
@@ -27,13 +27,6 @@ _SETTINGS_FILENAME = "settings.json"
 _SETTINGS_LOCK_FILENAME = ".settings.lock"
 
 _DEFAULT_PROFILE_NAME = "Défaut"
-
-# Anciens fichiers regroupés dans settings.json (un seul cycle lecture-fusion-
-# écriture pour ces réglages peu fréquemment modifiés, plutôt qu'un fichier
-# par réglage) : conservés ici uniquement pour la migration ponctuelle de
-# ceux qui existent encore sur disque, voir migrate_legacy_files().
-_LEGACY_LAST_DIRS_FILENAME = "last_dirs.json"
-_LEGACY_PROMPTS_FILENAME = "prompts.json"
 
 
 def get_app_dir() -> Path:
@@ -98,21 +91,108 @@ def copy_sample_reports() -> None:
     """Copie dans le dossier normal des fiches (get_reports_dir()) les fiches
     d'exemple fournies avec l'application (dossier Fiches/ du projet en
     développement, embarqué sous get_resource_dir()/Fiches en mode compilé,
-    voir distillat.spec). Ne copie que les fichiers .distillat.json (jamais
+    voir distillat.spec). Ne copie que les fichiers .dstl (jamais
     Couverture.png, image de travail non destinée à être distribuée) et
     n'écrase jamais un fichier déjà présent à la destination, pour ne
-    jamais perdre une modification que l'utilisateur y aurait faite."""
+    jamais perdre une modification que l'utilisateur y aurait faite.
+
+    Les fiches d'exemple étaient auparavant distribuées en .distillat.json :
+    si l'utilisateur possède déjà la fiche d'exemple sous ce nom (installation
+    antérieure au passage à .dstl), elle est renommée sur place plutôt que
+    recopiée depuis la source, pour ne jamais créer un doublon de la même
+    fiche sous les deux extensions."""
     source_dir = get_resource_dir() / "Fiches"
     if not source_dir.is_dir():
         return
     destination_dir = get_reports_dir()
-    for item in source_dir.glob("*.distillat.json"):
+    for item in source_dir.glob("*.dstl"):
         target = destination_dir / item.name
-        if not target.exists():
+        if target.exists():
+            continue
+        legacy_target = destination_dir / f"{item.stem}.distillat.json"
+        if legacy_target.exists():
             try:
-                shutil.copyfile(item, target)
+                legacy_target.rename(target)
             except OSError:
                 pass
+            continue
+        try:
+            shutil.copyfile(item, target)
+        except OSError:
+            pass
+
+
+_DSTL_PROG_ID = "Distillat.Report"
+_DSTL_MIME_TYPE = "application/vnd.distillat.report+json"
+
+
+def ensure_dstl_file_association() -> None:
+    """Associe l'extension .dstl à Distillat.exe dans le Registre Windows
+    (HKEY_CURRENT_USER\\Software\\Classes, aucun droit administrateur requis),
+    pour qu'un double-clic sur une fiche l'ouvre directement (voir main.py).
+    N'agit qu'en mode compilé (sys.frozen) : un lancement en développement via
+    `python main.py` n'a pas d'exécutable stable à associer.
+
+    N'écrit dans le Registre que si la commande d'ouverture actuellement
+    enregistrée diffère de la cible (absente, ou pointant vers un ancien
+    emplacement de l'exe après déplacement du dossier) : pas de réécriture à
+    chaque lancement une fois l'association déjà à jour. Toute erreur d'accès
+    au Registre est absorbée silencieusement : cette association est une
+    commodité, jamais une condition de démarrage de l'application.
+
+    Enregistre aussi un type MIME dédié (Content Type sur la clé .dstl) sans
+    usage actuel ni par l'application ni par Windows en local (le double-clic
+    ne dépend que de l'association d'extension ci-dessous) : simple anticipation
+    d'un éventuel usage web futur (téléchargement, pièce jointe email) où un
+    type MIME devient consulté."""
+    if not getattr(sys, "frozen", False):
+        return
+    exe_path = str(Path(sys.executable))
+    command_value = f'"{exe_path}" "%1"'
+    icon_value = f'"{exe_path}",0'
+
+    try:
+        if _registry_string_value(
+            winreg.HKEY_CURRENT_USER, rf"Software\Classes\{_DSTL_PROG_ID}\shell\open\command"
+        ) == command_value:
+            return
+
+        _set_registry_string_value(winreg.HKEY_CURRENT_USER, r"Software\Classes\.dstl", None, _DSTL_PROG_ID)
+        _set_registry_string_value(
+            winreg.HKEY_CURRENT_USER, r"Software\Classes\.dstl", "Content Type", _DSTL_MIME_TYPE
+        )
+        _set_registry_string_value(
+            winreg.HKEY_CURRENT_USER, rf"Software\Classes\{_DSTL_PROG_ID}", None, "Fiche Distillat"
+        )
+        _set_registry_string_value(
+            winreg.HKEY_CURRENT_USER, rf"Software\Classes\{_DSTL_PROG_ID}\DefaultIcon", None, icon_value
+        )
+        _set_registry_string_value(
+            winreg.HKEY_CURRENT_USER,
+            rf"Software\Classes\{_DSTL_PROG_ID}\shell\open\command",
+            None,
+            command_value,
+        )
+
+        # SHCNE_ASSOCCHANGED/SHCNF_IDLIST : force l'Explorateur à reprendre en
+        # compte la nouvelle association sans redémarrage.
+        ctypes.windll.shell32.SHChangeNotify(0x08000000, 0x0000, None, None)
+    except OSError:
+        pass
+
+
+def _registry_string_value(hive, subkey: str) -> str | None:
+    try:
+        with winreg.OpenKey(hive, subkey) as key:
+            value, _ = winreg.QueryValueEx(key, "")
+            return value
+    except OSError:
+        return None
+
+
+def _set_registry_string_value(hive, subkey: str, name: str | None, value: str) -> None:
+    with winreg.CreateKey(hive, subkey) as key:
+        winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
 
 
 def get_debug_logs_dir() -> Path:
@@ -298,102 +378,6 @@ def _save_last_dir(key: str, directory: Path) -> None:
     update_settings(_mutate)
 
 
-def migrate_legacy_files() -> None:
-    """Déplace vers les nouveaux emplacements (AppData/Documents) les fichiers
-    laissés par d'anciennes versions de Distillat qui les créaient à côté de
-    l'exe (ne s'applique qu'en mode compilé), et fusionne dans settings.json
-    les anciens last_dirs.json/prompts.json s'ils existent encore (s'applique
-    aussi en développement, ces fichiers vivaient déjà dans %APPDATA%\\Distillat
-    dans les deux modes). Ne remplace/n'écrase jamais une donnée déjà présente
-    au nouvel emplacement (ne perd jamais de données)."""
-    _merge_legacy_settings_files()
-    _migrate_legacy_api_key_to_profile()
-    _cleanup_legacy_api_key_entry()
-
-    if not getattr(sys, "frozen", False):
-        return
-
-    legacy_dir = get_app_dir()
-
-    legacy_path = legacy_dir / ".quota_state.json"
-    new_path = get_settings_dir() / ".quota_state.json"
-    if legacy_path.exists() and not new_path.exists():
-        try:
-            shutil.move(str(legacy_path), str(new_path))
-        except OSError:
-            pass
-
-    legacy_reports_dir = legacy_dir / "Fiches"
-    if legacy_reports_dir.is_dir():
-        new_reports_dir = get_reports_dir()
-        for item in legacy_reports_dir.iterdir():
-            target = new_reports_dir / item.name
-            if not target.exists():
-                try:
-                    shutil.move(str(item), str(target))
-                except OSError:
-                    pass
-        try:
-            next(legacy_reports_dir.iterdir())
-        except StopIteration:
-            legacy_reports_dir.rmdir()
-        except OSError:
-            pass
-
-
-def _merge_legacy_settings_files() -> None:
-    """Fusionne dans settings.json les anciens fichiers last_dirs.json et
-    prompts.json (chacun dans son propre fichier avant leur regroupement),
-    s'ils existent encore. Contrairement au reste de migrate_legacy_files(),
-    s'applique aussi en développement (ces fichiers vivaient déjà dans
-    %APPDATA%\\Distillat dans les deux modes, ce n'est pas un changement de
-    dossier mais de structure). Ne perd jamais de donnée déjà présente dans
-    settings.json (une clé qui y existe déjà n'est jamais écrasée) ; supprime
-    l'ancien fichier une fois sa fusion effectuée avec succès."""
-    settings_dir = get_settings_dir()
-    last_dirs_path = settings_dir / _LEGACY_LAST_DIRS_FILENAME
-    prompts_path = settings_dir / _LEGACY_PROMPTS_FILENAME
-    if not last_dirs_path.exists() and not prompts_path.exists():
-        return
-
-    # Tout le cycle (relecture, fusion, écriture, mise à la corbeille des
-    # anciens fichiers) sous le verrou inter-processus : deux instances
-    # lancées simultanément ne peuvent plus fusionner puis réécrire chacune
-    # sa propre vision périmée de settings.json.
-    with _settings_lock():
-        settings = load_settings()
-        changed = False
-
-        if last_dirs_path.exists() and "last_dirs" not in settings:
-            try:
-                legacy_last_dirs = json.loads(last_dirs_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                legacy_last_dirs = None
-            if isinstance(legacy_last_dirs, dict):
-                settings["last_dirs"] = legacy_last_dirs
-                changed = True
-            try:
-                send2trash(str(last_dirs_path))
-            except OSError:
-                pass
-
-        if prompts_path.exists() and "prompts" not in settings:
-            try:
-                legacy_prompts = json.loads(prompts_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                legacy_prompts = None
-            if isinstance(legacy_prompts, dict):
-                settings["prompts"] = legacy_prompts
-                changed = True
-            try:
-                send2trash(str(prompts_path))
-            except OSError:
-                pass
-
-        if changed:
-            _write_settings_file(settings)
-
-
 def load_language_setting() -> str | None:
     """Langue de l'interface choisie par l'utilisateur (code "fr"/"en"), ou
     None si aucune n'a encore été enregistrée (premier démarrage : la langue
@@ -430,9 +414,8 @@ def save_api_key(api_key: str) -> bool:
 def _profile_keyring_username(profile_id: str) -> str:
     """Chaque profil de clé API a sa propre entrée dans le Gestionnaire
     d'identification Windows, distincte de l'ancienne entrée unique
-    KEYRING_USERNAME (conservée telle quelle pour la migration, voir
-    _migrate_legacy_api_key_to_profile), pour que plusieurs clés puissent
-    coexister sans jamais s'écraser entre elles."""
+    KEYRING_USERNAME, pour que plusieurs clés puissent coexister sans jamais
+    s'écraser entre elles."""
     return f"gemini_api_key_{profile_id}"
 
 
@@ -595,60 +578,3 @@ def find_profile_by_name(name: str, exclude_profile_id: str | None = None) -> di
     return None
 
 
-def _migrate_legacy_api_key_to_profile() -> None:
-    """Reprend l'ancienne clé API unique (KEYRING_USERNAME, avant l'ajout des
-    profils multiples) dans un premier profil nommé "Défaut", si aucun profil
-    n'a encore été créé. Cette migration ne fait elle-même qu'une copie vers
-    la nouvelle entrée par profil, jamais de suppression : c'est
-    _cleanup_legacy_api_key_entry() (appelée juste après par
-    migrate_legacy_files()) qui supprime l'ancienne entrée, uniquement après
-    avoir vérifié qu'une copie identique existe bien dans un profil. Le contrôle "aucun profil encore créé" et
-    l'écriture se font sous le verrou inter-processus de settings.json : deux
-    instances lancées simultanément au premier démarrage suivant la mise à
-    jour créaient sinon chacune son propre profil "Défaut" (UUID différents),
-    la dernière écriture écrasant l'autre et laissant son entrée keyring
-    orpheline (course fermée le 2026-07-22)."""
-    if list_profiles():
-        # Pré-contrôle sans verrou : cas courant à chaque démarrage suivant,
-        # aucune migration à faire, inutile de sérialiser quoi que ce soit.
-        return
-    with _settings_lock():
-        settings = load_settings()
-        profiles = settings.get("api_profiles", [])
-        if isinstance(profiles, list) and profiles:
-            return
-        legacy_api_key = load_api_key()
-        if not legacy_api_key:
-            return
-        profile_id = str(uuid.uuid4())
-        if not save_profile_api_key(profile_id, legacy_api_key):
-            return
-        settings["api_profiles"] = [{"id": profile_id, "name": _DEFAULT_PROFILE_NAME}]
-        _write_settings_file(settings)
-
-
-def _cleanup_legacy_api_key_entry() -> None:
-    """Supprime l'ancienne entrée keyring unique (KEYRING_USERNAME) une fois
-    qu'une copie identique de sa valeur existe de façon vérifiée dans l'entrée
-    keyring d'un des profils (relecture réelle via find_profile_by_api_key(),
-    jamais une simple supposition que la migration a eu lieu) : laisser cette
-    entrée indéfiniment gardait une copie du secret dans le Gestionnaire
-    d'identification Windows, qui survivait même à une rotation de clé faite
-    depuis l'UI (celle-ci ne modifie que l'entrée du profil), signalé à
-    l'audit de sécurité du 2026-07-22. Si l'ancienne entrée contient une
-    valeur qui ne correspond à aucun profil (cas imprévu : seule copie
-    restante d'une clé), elle est laissée intacte, aucune suppression sur un
-    simple doute. Appelée à chaque démarrage par migrate_legacy_files(),
-    juste après _migrate_legacy_api_key_to_profile() : couvre donc aussi bien
-    une migration qui vient d'avoir lieu que les installations migrées par
-    une version antérieure, qui laissait toujours cette entrée derrière
-    elle."""
-    legacy_api_key = load_api_key()
-    if not legacy_api_key:
-        return
-    if find_profile_by_api_key(legacy_api_key) is None:
-        return
-    try:
-        keyring.delete_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
-    except KeyringError:
-        pass
