@@ -1439,16 +1439,27 @@ laisser croire à une génération réelle.
   `### `/`## `/`# ` devient un titre stylé, tout le reste est un paragraphe de
   corps (le tout premier reçoit la lettrine). Couverture = première page du
   PDF source si présente. Un chapitre par `PageBreak`.
-  `_footer_factory(book_title)` dessine le pied de page (`onLaterPages`,
-  absent de la première page) : nom du livre à gauche, numéro de page à
-  droite - inchangé depuis l'ajout de `BookReport.ai_model` (voir ci-dessus).
-  La mention IA n'apparaît jamais dans le contenu visible du PDF : elle est
-  passée en métadonnées du document via le paramètre `keywords=` de
-  `SimpleDocTemplate` dans `export_book_report_to_pdf()`
+  `_footer_factory(book_title, ai_model)` dessine le pied de page
+  (`onLaterPages`, absent de la première page) : nom du livre à gauche,
+  numéro de page à droite, et depuis l'ajout de ce paramètre une troisième
+  ligne centrée sous le séparateur, en italique très petit (6.5pt, couleur
+  atténuée `INK_MUTED`) - `tr("pdf_export.ai_generated_footer",
+  model=ai_model)` (ex. « Généré par IA (nom du modèle) ») si `ai_model` est
+  renseigné, sinon `tr("pdf_export.ai_generated_footer_unknown_model")`
+  (« Généré par IA », sans nom de modèle) - discrète mais visible à la
+  lecture, systématiquement présente (contrairement à la mention dans les
+  métadonnées ci-dessous, absente si `ai_model` est vide) pour qu'un PDF
+  exporté par Distillat porte toujours cette mention visuelle, y compris pour
+  une fiche résiduelle jamais passée par la migration qui renseigne
+  normalement `ai_model` (voir `ensure_ai_model_mentioned()` plus haut). Vient
+  en complément, pas en remplacement, de la mention dans les métadonnées du
+  document via le
+  paramètre `keywords=` de `SimpleDocTemplate` dans
+  `export_book_report_to_pdf()`
   (`tr("pdf_export.ai_generated_keywords", model=result.ai_model)` si
   `ai_model` n'est pas vide, chaîne vide sinon), propriété PDF standard
   `/Keywords` consultable via les propriétés du fichier dans un lecteur PDF,
-  jamais imprimée ni affichée à la lecture du document.
+  celle-ci jamais imprimée ni affichée à la lecture du document.
 
   ReportLab n'écrit que le dictionnaire `/Info` classique (titre, auteur,
   mots-clés ci-dessus), lisible par `pypdf`/Adobe Acrobat mais jamais affiché
@@ -1526,6 +1537,23 @@ laisser croire à une génération réelle.
     `None` a été retiré (audit du 2026-07-22) : sans effet dans ce cas précis
     (la fonction retourne immédiatement `None` sans aucun effet de bord),
     c'était un appel mort.
+  - `AutoHeightTextEdit` (sous-classe de `QTextEdit` utilisée pour la
+    description de chaque personnage dans `_populate_characters_tab()`) :
+    ajuste sa hauteur (`setFixedHeight`) à la taille réelle de son contenu via
+    `_adjust_height()`, normalement déclenché par son propre `resizeEvent`.
+    Ce déclenchement ne suffit pas lorsqu'une fiche déjà affichée est
+    remplacée par une autre (`_populate_characters_tab()` rappelée sur une
+    fenêtre déjà stabilisée) : la fenêtre ne change alors pas de taille, donc
+    aucun `resizeEvent` ne survient sur les nouveaux widgets de description
+    après leur `setPlainText()`, qui restent bloqués à la hauteur par défaut
+    de `QTextEdit` et deviennent scrollables individuellement malgré
+    `setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)`. Seule la toute
+    première ouverture d'une fiche échappait à ce bug, la construction
+    initiale de la fenêtre déclenchant naturellement un `resizeEvent` en
+    cascade. Corrigé le 2026-08-06 par un appel explicite à
+    `description_input._adjust_height()` juste après `setPlainText()`, en
+    plus du `resizeEvent` existant (toujours utile pour les redimensionnements
+    de fenêtre ultérieurs).
   - `_on_finished_ok()` (connectée à `SummarizeWorker.finished_ok`) joue un
     petit son via `winsound.PlaySound(str(config.get_success_sound_path()),
     winsound.SND_FILENAME | winsound.SND_ASYNC)` juste après l'affichage de la
@@ -1542,6 +1570,21 @@ laisser croire à une génération réelle.
     qui se retraduit de lui-même à sa prochaine mise à jour naturelle : un
     changement de langue à chaud, sans redémarrage, mais aussi sans le risque
     de régression d'un rebuild complet de `_build_ui()` en cours de session.
+    Piège rencontré ici avec `self.characters_placeholder` (le texte d'aide
+    affiché dans l'onglet Personnages tant qu'aucune fiche n'est chargée) :
+    `_clear_result_tabs()` (appelée à la fermeture d'une fiche) recréait un
+    nouveau `QLabel` identique visuellement mais dans une variable locale
+    jamais réassignée à `self.characters_placeholder`, qui restait donc
+    pointer vers l'ancien widget entre-temps détruit par `deleteLater()` via
+    `_clear_characters_tab()`. `retranslate_ui()` plantait alors
+    (`RuntimeError: wrapped C/C++ object of type QLabel has been deleted`) au
+    changement de langue suivant, uniquement après avoir fermé/retiré au
+    moins une fiche depuis le lancement de l'application - corrigé le
+    2026-08-06 en réassignant bien `self.characters_placeholder` au nouveau
+    `QLabel` dans `_clear_result_tabs()`. À garder en tête pour tout futur
+    widget recréé dynamiquement puis retraduit par `retranslate_ui()` : la
+    référence `self.xxx` doit toujours pointer vers le widget réellement
+    présent dans le layout, jamais vers une variable locale de substitution.
   - `_on_new_instance_clicked()` (bouton dans le header, à droite immédiate
     du titre "Distillat" - ajouté le 2026-07-22) : lance une nouvelle
     instance de Distillat via `subprocess.Popen()`, après vérification de
@@ -1723,7 +1766,17 @@ laisser croire à une génération réelle.
     `ChangelogDialog` (affiche `CHANGELOG.md` via `setMarkdown()` pour un
     rendu mis en forme plutôt que les balises brutes, même mécanisme de
     résolution de chemin que `LicenseDialog` via `config.get_resource_dir()`,
-    bundlé à la compilation via `distillat.spec`), `QuotaHelpDialog` (texte statique fixe,
+    bundlé à la compilation via `distillat.spec` ; police jugée trop petite,
+    corrigée le 2026-08-06 via `_scale_markdown_font_size()` - `setMarkdown()`
+    fixe une taille de police explicite en points sur chaque fragment de
+    texte généré (titres, code inline, corps), ce qui rend `setStyleSheet()`
+    sur le widget et `document().setDefaultFont()` tous deux sans aucun effet
+    visible sur ce texte, contrairement à un `QTextEdit` rempli normalement
+    via `setPlainText()`. Seule solution qui fonctionne réellement :
+    parcourir chaque fragment du document après `setMarkdown()` et multiplier
+    explicitement sa taille de police existante par un facteur, pour
+    l'agrandir tout en conservant la hiérarchie visuelle voulue par Markdown
+    - titres toujours proportionnellement plus grands que le corps), `QuotaHelpDialog` (texte statique fixe,
     sans jargon technique, expliquant le fonctionnement des quotas/requêtes
     Gemini au public non technique : ouverte via le bouton `?` placé à gauche
     de `status_label`, ajouté le 2026-07-21), `MosaicViewAdDialog` (ajouté le
@@ -1735,7 +1788,19 @@ laisser croire à une génération réelle.
     deux liens une légende traduite - "Page de présentation"/"Téléchargement"
     - suivie de l'URL elle-même affichée en clair comme texte du bouton
     cliquable, plutôt qu'un libellé générique masquant l'URL réelle, à la
-    demande explicite de l'utilisateur). Tous ces dialogues utilisent un
+    demande explicite de l'utilisateur ; largeur fixe à 420px
+    (`setFixedWidth`) mais hauteur calculée dynamiquement via
+    `layout.heightForWidth(420)` puis `self.resize(420, hauteur)`, plutôt que
+    `self.adjustSize()` : `adjustSize()` s'appuie sur le `sizeHint()` du
+    layout, qui pour un `QLabel` avec `setWordWrap(True)` ignore la largeur
+    imposée par le parent et retourne la taille "sur une seule ligne, non
+    repliée" - la hauteur de fenêtre calculée était alors bien trop petite et
+    tronquait le texte de description, silencieusement (aucune barre de
+    défilement, le contenu débordait juste hors de la fenêtre). `heightForWidth()`
+    donne au contraire la hauteur réelle une fois le texte replié à la
+    largeur fixée, et reste calculé dynamiquement à chaque ouverture : la
+    hauteur s'adapte donc correctement à la longueur du texte traduit, quelle
+    que soit la langue active - bug corrigé le 2026-08-06). Tous ces dialogues utilisent un
     `QPushButton`/`QDialogButtonBox.addButton(tr(...), <Role>)` construit à la
     main pour chacun de leurs boutons (Fermer/OK/Annuler/Sauvegarder/Réinitialiser),
     traduit via `tr()`, plutôt que les rôles standard `QDialogButtonBox.Ok`/
@@ -1761,18 +1826,21 @@ laisser croire à une génération réelle.
     source » (`update_checker.repo_page_url()`), « Téléchargement »
     (`update_checker.releases_page_url()`, déjà utilisé par le bandeau de mise
     à jour), « Changelog », « Page web » (`update_checker.project_site_url()`,
-    vers la landing page du projet, ajouté le 2026-07-22) et, ajouté le
-    2026-08-01, « Publicité éhontée » (`_on_show_mosaicview_ad()`, ouvre
-    `MosaicViewAdDialog` décrit plus haut) - les quatre premiers ouverts
-    directement via `webbrowser.open()`, le dernier via une fenêtre modale.
-    Comme tout texte affiché, chaque bouton de ce footer doit être réappliqué
-    dans `_retranslate_ui()` au changement de langue à chaud : un bouton
-    ajouté au footer sans y être ajouté reste figé dans la langue de sa
-    création (bug constaté une première fois le 2026-07-22 sur
+    vers la landing page du projet, ajouté le 2026-07-22), « Contact » (ajouté
+    le 2026-08-06, `_on_open_mail()`, ouvre le client mail par défaut vers
+    l'adresse de contact du projet avec l'objet "Distillat" prérempli, via un
+    lien `mailto:`) et, ajouté le 2026-08-01, « Publicité éhontée »
+    (`_on_show_mosaicview_ad()`, ouvre `MosaicViewAdDialog` décrit plus haut) -
+    tous ouverts directement via `webbrowser.open()` sauf le dernier, via une
+    fenêtre modale. Comme tout texte affiché, chaque bouton de ce footer doit
+    être réappliqué dans `_retranslate_ui()` au changement de langue à chaud :
+    un bouton ajouté au footer sans y être ajouté reste figé dans la langue de
+    sa création (bug constaté une première fois le 2026-07-22 sur
     `project_site_link_button`, puis à nouveau le 2026-08-01 sur
     `mosaicview_ad_button` lors de son ajout - même oubli reproduit deux fois
     de suite sur un nouveau bouton de ce même footer, à surveiller
-    particulièrement pour tout futur ajout).
+    particulièrement pour tout futur ajout ; le bouton « Contact » y a bien été
+    ajouté dès sa création le 2026-08-06).
     `PendingResumesDialog` (appelé par `_offer_pending_resumes()`, invoqué
     depuis `main.py` juste après `window.show()` - et non depuis
     `MainWindow.__init__()` - pour que la fenêtre principale soit déjà visible

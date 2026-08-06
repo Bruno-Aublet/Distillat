@@ -21,6 +21,7 @@ from PyQt5.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QTextCharFormat,
     QTextCursor,
 )
 from PyQt5.QtWidgets import (
@@ -81,6 +82,7 @@ class LicenseDialog(QDialog):
         license_view = QTextEdit()
         license_view.setReadOnly(True)
         license_view.setFontFamily("Courier New")
+        license_view.setStyleSheet("font-size: 14px;")
 
         license_path = config.get_resource_dir() / "LICENSE"
         try:
@@ -97,6 +99,37 @@ class LicenseDialog(QDialog):
         ok_button.clicked.connect(self.accept)
         ok_row.addWidget(ok_button)
         layout.addLayout(ok_row)
+
+
+def _scale_markdown_font_size(text_edit: QTextEdit, factor: float) -> None:
+    """setMarkdown() fixe une taille de police explicite en points sur
+    chaque fragment de texte (titres, code inline, corps), qui ne dépend pas
+    de la police par défaut du document ni du style CSS du widget : ni
+    setStyleSheet() ni document().setDefaultFont() n'ont donc d'effet visible
+    sur ce texte (constaté le 2026-08-06 sur ChangelogDialog, après plusieurs
+    tentatives infructueuses par ces deux voies). Seule solution qui
+    fonctionne réellement : multiplier explicitement, fragment par fragment,
+    la taille de police déjà présente sur chaque portion de texte, pour
+    l'agrandir tout en conservant la hiérarchie visuelle voulue par Markdown
+    (titres toujours plus grands que le corps, dans les mêmes proportions
+    qu'avant)."""
+    cursor = QTextCursor(text_edit.document())
+    block = text_edit.document().begin()
+    while block.isValid():
+        it = block.begin()
+        while not it.atEnd():
+            fragment = it.fragment()
+            if fragment.isValid():
+                char_format = fragment.charFormat()
+                current_size = char_format.font().pointSizeF()
+                if current_size > 0:
+                    new_format = QTextCharFormat()
+                    new_format.setFontPointSize(current_size * factor)
+                    cursor.setPosition(fragment.position())
+                    cursor.setPosition(fragment.position() + fragment.length(), QTextCursor.KeepAnchor)
+                    cursor.mergeCharFormat(new_format)
+            it += 1
+        block = block.next()
 
 
 class ChangelogDialog(QDialog):
@@ -116,6 +149,7 @@ class ChangelogDialog(QDialog):
         changelog_path = config.get_resource_dir() / "CHANGELOG.md"
         try:
             changelog_view.setMarkdown(changelog_path.read_text(encoding="utf-8"))
+            _scale_markdown_font_size(changelog_view, 1.4)
         except OSError:
             changelog_view.setPlainText(
                 tr("changelog_dialog.file_not_found", changelog_path=changelog_path)
@@ -138,11 +172,12 @@ class QuotaHelpDialog(QDialog):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setWindowTitle(tr("quota_help_dialog.window_title"))
-        self.resize(480, 420)
+        self.setFixedWidth(480)
 
         layout = QVBoxLayout(self)
 
         intro = QLabel(tr("quota_help_dialog.intro"))
+        intro.setStyleSheet("font-size: 14px;")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -152,15 +187,14 @@ class QuotaHelpDialog(QDialog):
             ("quota_help_dialog.resume_title", "quota_help_dialog.resume_body"),
         ):
             title = QLabel(tr(title_key))
-            title.setStyleSheet("font-weight: bold;")
+            title.setStyleSheet("font-weight: bold; font-size: 14px;")
             title.setWordWrap(True)
             layout.addWidget(title)
 
             body = QLabel(tr(body_key))
+            body.setStyleSheet("font-size: 14px;")
             body.setWordWrap(True)
             layout.addWidget(body)
-
-        layout.addStretch()
 
         close_row = QHBoxLayout()
         close_row.addStretch()
@@ -168,6 +202,9 @@ class QuotaHelpDialog(QDialog):
         close_button.clicked.connect(self.close)
         close_row.addWidget(close_button)
         layout.addLayout(close_row)
+
+        layout.activate()
+        self.resize(480, layout.heightForWidth(480))
 
 
 class ExtraTextDialog(QDialog):
@@ -216,7 +253,7 @@ class MosaicViewAdDialog(QDialog):
         super().__init__(parent)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setWindowTitle(tr("mosaicview_ad_dialog.window_title"))
-        self.resize(420, 420)
+        self.setFixedWidth(420)
 
         layout = QVBoxLayout(self)
 
@@ -240,6 +277,7 @@ class MosaicViewAdDialog(QDialog):
         layout.addWidget(title_label)
 
         description_label = QLabel(tr("mosaicview_ad_dialog.description"))
+        description_label.setStyleSheet("font-size: 14px;")
         description_label.setAlignment(Qt.AlignCenter)
         description_label.setWordWrap(True)
         layout.addWidget(description_label)
@@ -280,7 +318,7 @@ class MosaicViewAdDialog(QDialog):
         releases_button.clicked.connect(lambda: webbrowser.open(_MOSAICVIEW_RELEASES_URL))
         layout.addWidget(releases_button, alignment=Qt.AlignCenter)
 
-        layout.addStretch()
+        layout.addSpacing(24)
 
         close_row = QHBoxLayout()
         close_row.addStretch()
@@ -288,6 +326,9 @@ class MosaicViewAdDialog(QDialog):
         close_button.clicked.connect(self.close)
         close_row.addWidget(close_button)
         layout.addLayout(close_row)
+
+        layout.activate()
+        self.resize(420, layout.heightForWidth(420))
 
 
 def _draw_eye_icon(color: str, slashed: bool) -> QIcon:
@@ -487,10 +528,12 @@ class ProfilesDialog(QDialog):
         layout = QVBoxLayout(self)
 
         info = QLabel(tr("profiles_dialog.list_info"))
+        info.setStyleSheet("font-size: 14px;")
         info.setWordWrap(True)
         layout.addWidget(info)
 
         self.list_widget = _DeselectableListWidget()
+        self.list_widget.setStyleSheet("font-size: 14px;")
         self.list_widget.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self.list_widget)
 
@@ -777,38 +820,52 @@ class QuotaLimitsDialog(QDialog):
         layout = QVBoxLayout(self)
 
         model_label = QLabel(tr("quota_limits_dialog.model_label", model_name=model_name))
+        model_label.setStyleSheet("font-size: 14px;")
         model_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(model_label)
 
         info = QLabel(tr("quota_limits_dialog.info"))
+        info.setStyleSheet("font-size: 14px;")
         info.setWordWrap(True)
         info.setOpenExternalLinks(True)
         info.setAlignment(Qt.AlignCenter)
         layout.addWidget(info)
 
+        layout.addSpacing(16)
+
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
 
+        rpm_label = QLabel(tr("quota_limits_dialog.rpm_label"))
+        rpm_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         self.rpm_input = QSpinBox()
         self.rpm_input.setRange(1, 100_000)
         self.rpm_input.setValue(current_rpm)
         self.rpm_input.setFixedWidth(100)
-        form.addRow(tr("quota_limits_dialog.rpm_label"), self.rpm_input)
+        form.addRow(rpm_label, self.rpm_input)
 
+        tpm_label = QLabel(tr("quota_limits_dialog.tpm_label"))
+        tpm_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         self.tpm_input = QSpinBox()
         self.tpm_input.setRange(1, 100_000_000)
         self.tpm_input.setSingleStep(1000)
         self.tpm_input.setValue(current_tpm)
         self.tpm_input.setFixedWidth(100)
-        form.addRow(tr("quota_limits_dialog.tpm_label"), self.tpm_input)
+        form.addRow(tpm_label, self.tpm_input)
 
+        rpd_label = QLabel(tr("quota_limits_dialog.rpd_label"))
+        rpd_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         self.rpd_input = QSpinBox()
         self.rpd_input.setRange(1, 1_000_000)
         self.rpd_input.setValue(current_rpd)
         self.rpd_input.setFixedWidth(100)
-        form.addRow(tr("quota_limits_dialog.rpd_label"), self.rpd_input)
+        form.addRow(rpd_label, self.rpd_input)
 
-        layout.addLayout(form)
+        form_row = QHBoxLayout()
+        form_row.addStretch()
+        form_row.addLayout(form)
+        form_row.addStretch()
+        layout.addLayout(form_row)
 
         buttons = QDialogButtonBox()
         buttons.addButton(tr("quota_limits_dialog.ok_button"), QDialogButtonBox.AcceptRole)
@@ -844,7 +901,7 @@ class PromptsDialog(QDialog):
         self._profile_id = profile_id
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setWindowTitle(tr("prompts_dialog.window_title"))
-        self.resize(750, 600)
+        self.resize(750, 680)
 
         current_prompts = current_prompts or {}
 
@@ -852,7 +909,8 @@ class PromptsDialog(QDialog):
 
         warning = QLabel(tr("prompts_dialog.warning"))
         warning.setWordWrap(True)
-        warning.setStyleSheet("color: #b02a2a; font-weight: bold;")
+        warning.setAlignment(Qt.AlignJustify)
+        warning.setStyleSheet("color: #b02a2a; font-weight: bold; font-size: 14px;")
         layout.addWidget(warning)
 
         self.tabs = QTabWidget()
@@ -1541,6 +1599,7 @@ class MainWindow(QMainWindow):
         self.download_link_button.setText(tr("main_window.download_link"))
         self.changelog_link_button.setText(tr("main_window.changelog_link"))
         self.project_site_link_button.setText(tr("main_window.project_site_link"))
+        self.mail_link_button.setText(tr("main_window.mail_link"))
         self.mosaicview_ad_button.setText(tr("main_window.mosaicview_ad_link"))
         if not self.last_result:
             self.cover_label.setText(tr("main_window.no_cover"))
@@ -1633,7 +1692,7 @@ class MainWindow(QMainWindow):
 
         file_row = QHBoxLayout()
         self.file_label = QLabel(tr("main_window.no_file_selected"))
-        self.file_label.setStyleSheet("color: #555;")
+        self.file_label.setStyleSheet("color: #555; font-size: 15px; font-weight: bold;")
         self.file_label.setAlignment(Qt.AlignCenter)
         file_row.addStretch()
         file_row.addWidget(self.file_label)
@@ -1699,7 +1758,7 @@ class MainWindow(QMainWindow):
         status_row.addWidget(self.quota_help_button)
 
         self.status_label = QLabel(tr("main_window.idle_status"))
-        self.status_label.setStyleSheet("color: #555;")
+        self.status_label.setStyleSheet("color: #555; font-size: 14px;")
         self.status_label.setWordWrap(True)
         status_row.addWidget(self.status_label, stretch=1)
 
@@ -1827,6 +1886,12 @@ class MainWindow(QMainWindow):
         self.project_site_link_button.setStyleSheet(footer_link_style)
         self.project_site_link_button.clicked.connect(self._on_open_project_site)
         footer_row.addWidget(self.project_site_link_button)
+
+        self.mail_link_button = QPushButton(tr("main_window.mail_link"))
+        self.mail_link_button.setCursor(Qt.PointingHandCursor)
+        self.mail_link_button.setStyleSheet(footer_link_style)
+        self.mail_link_button.clicked.connect(self._on_open_mail)
+        footer_row.addWidget(self.mail_link_button)
 
         self.mosaicview_ad_button = QPushButton(tr("main_window.mosaicview_ad_link"))
         self.mosaicview_ad_button.setCursor(Qt.PointingHandCursor)
@@ -1973,6 +2038,12 @@ class MainWindow(QMainWindow):
             description_input.textChanged.connect(self._on_result_edited)
             card_layout.addWidget(description_input)
             self.character_description_inputs.append(description_input)
+            # Remplacer une fiche déjà affichée ne redimensionne pas la
+            # fenêtre : resizeEvent ne se déclenche donc pas tout seul ici,
+            # contrairement au tout premier affichage. Recalcul explicite
+            # nécessaire pour éviter un bloc de description resté scrollable
+            # à sa hauteur par défaut.
+            description_input._adjust_height()
 
             self.characters_layout.insertWidget(index, card)
             self.characters_layout.insertSpacing(index + 1, 10)
@@ -2319,6 +2390,9 @@ class MainWindow(QMainWindow):
     def _on_open_project_site(self) -> None:
         webbrowser.open(project_site_url())
 
+    def _on_open_mail(self) -> None:
+        webbrowser.open("mailto:distillatresumeur@gmail.com?subject=Distillat")
+
     def _on_show_mosaicview_ad(self) -> None:
         MosaicViewAdDialog(self).exec_()
 
@@ -2339,6 +2413,7 @@ class MainWindow(QMainWindow):
                     background-color: #2ea04f;
                     color: white;
                     font-weight: bold;
+                    font-size: 15px;
                     border-radius: 4px;
                 }
                 QPushButton:hover {
@@ -2385,7 +2460,7 @@ class MainWindow(QMainWindow):
         self.save_report_button.setEnabled(False)
         self.close_report_button.setEnabled(False)
         self.status_label.setText(tr("main_window.idle_status"))
-        self.status_label.setStyleSheet("color: #555;")
+        self.status_label.setStyleSheet("color: #555; font-size: 14px;")
         self.extra_text_label.hide()
         self.last_result = None
         self._last_report_source_path = None
@@ -2405,7 +2480,7 @@ class MainWindow(QMainWindow):
         self.save_report_button.setEnabled(False)
         self.close_report_button.setEnabled(False)
         self.status_label.setText(tr("main_window.idle_status"))
-        self.status_label.setStyleSheet("color: #555;")
+        self.status_label.setStyleSheet("color: #555; font-size: 14px;")
         self.extra_text_label.hide()
         self.last_result = None
         self._last_report_source_path = None
@@ -2422,7 +2497,7 @@ class MainWindow(QMainWindow):
         self.save_report_button.setEnabled(False)
         self.close_report_button.setEnabled(False)
         self.status_label.setText(tr("main_window.idle_status"))
-        self.status_label.setStyleSheet("color: #555;")
+        self.status_label.setStyleSheet("color: #555; font-size: 14px;")
         self.extra_text_label.hide()
         self._clear_result_tabs()
         self.result_tabs.setCurrentIndex(0)
@@ -2675,7 +2750,7 @@ class MainWindow(QMainWindow):
 
         self._last_progress_message = tr("main_window.starting_status")
         self._elapsed_seconds = 0
-        self.status_label.setStyleSheet("color: #555;")
+        self.status_label.setStyleSheet("color: #555; font-size: 14px;")
         self._render_status_with_elapsed()
         self._elapsed_timer.start()
 
@@ -2786,10 +2861,10 @@ class MainWindow(QMainWindow):
         self.detailed_summary_view.clear()
         self.analysis_view.clear()
         self._clear_characters_tab()
-        placeholder = QLabel(tr("main_window.characters_placeholder"))
-        placeholder.setStyleSheet("color: #888; padding: 12px;")
-        placeholder.setWordWrap(True)
-        self.characters_layout.insertWidget(0, placeholder)
+        self.characters_placeholder = QLabel(tr("main_window.characters_placeholder"))
+        self.characters_placeholder.setStyleSheet("color: #888; padding: 12px;")
+        self.characters_placeholder.setWordWrap(True)
+        self.characters_layout.insertWidget(0, self.characters_placeholder)
 
     def _display_book_report(self, result: BookReport) -> None:
         self.book_title_input.setText(result.book_title)
@@ -2892,7 +2967,7 @@ class MainWindow(QMainWindow):
             else tr("main_window.mode_single")
         )
         duration = self._format_duration(self._elapsed_seconds)
-        self.status_label.setStyleSheet("color: #2ea04f; font-weight: bold;")
+        self.status_label.setStyleSheet("color: #2ea04f; font-weight: bold; font-size: 14px;")
         self.status_label.setText(tr("main_window.finished_status", duration=duration, mode=mode))
         if result.extra_generated_text:
             self.extra_text_label.show()
@@ -2926,7 +3001,7 @@ class MainWindow(QMainWindow):
     def _on_failed(self, error_message: str, error_kind: str | None) -> None:
         self._elapsed_timer.stop()
         duration = self._format_duration(self._elapsed_seconds)
-        self.status_label.setStyleSheet("color: #b02a2a; font-weight: bold;")
+        self.status_label.setStyleSheet("color: #b02a2a; font-weight: bold; font-size: 14px;")
         self.status_label.setText(tr("main_window.failed_status", duration=duration))
         self._set_summarize_button_enabled(True)
         self.load_report_button.setEnabled(True)

@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.4.1] - 2026-08-06 - Lisibilité, correction du scroll des personnages, mention IA dans le PDF, bouton de contact
+
+- Ouvrir une fiche de lecture par-dessus une fiche déjà affichée pouvait laisser certains blocs de description de personnage scrollables individuellement au lieu d'afficher tout le texte, la hauteur de ces blocs n'étant recalculée automatiquement que lors d'un redimensionnement de la fenêtre (qui se produit naturellement au tout premier affichage, mais plus ensuite) : elle est désormais aussi recalculée explicitement à chaque remplacement de fiche.
+- Plusieurs fenêtres secondaires (publicité MosaicView, Changelog, Comprendre les quotas et les requêtes, Licence, Profils de clé API, Limites de quota, Prompts) affichaient leur texte dans une police trop petite et peu lisible, avec parfois une taille de fenêtre figée risquant de tronquer le contenu : la police est agrandie et la taille de ces fenêtres s'adapte désormais à leur contenu réel ; le texte de présentation de MosaicView a par ailleurs été enrichi de nouveaux exemples de fonctionnalités.
+- Dans la fenêtre principale, le nom du fichier sélectionné, le texte de statut à côté du bouton d'aide sur les quotas et le bouton "Résumer" affichaient leur texte dans une police trop petite : elle est agrandie sur les trois, sans changer la taille du bouton lui-même.
+- Fermer une fiche puis changer la langue de l'interface provoquait un plantage (`RuntimeError: wrapped C/C++ object ... has been deleted`) : le texte d'aide affiché dans l'onglet Personnages en l'absence de fiche pointait vers un widget déjà détruit après une première fermeture de fiche, plutôt que vers celui réellement affiché à l'écran.
+- La mention de l'origine IA du contenu d'un export PDF n'apparaissait jusqu'ici que dans les métadonnées du fichier, jamais à la lecture : une mention discrète (« Généré par IA (nom du modèle) ») s'affiche désormais aussi dans le pied de page.
+- Un nouveau bouton "Contact" dans le pied de page, juste après "Page web", ouvre le client mail par défaut avec l'objet "Distillat" prérempli.
+- Divers changements mineurs sur la landing page du projet (`index.html`).
+
 ## [1.4.0] - 2026-08-04 - Nouveau format .dstl, écran de lancement, transparence sur le modèle IA utilisé
 
 - L'extension des fiches sauvegardées passe de `.distillat.json` à `.dstl`, bien plus courte ; les fiches déjà sauvegardées au format `.distillat.json` restent lisibles indéfiniment et sont automatiquement renommées en `.dstl` dès qu'elles sont ouvertes (chargement ou glisser-déposer), avec une notification et une proposition de migrer en une fois tous les fichiers `.distillat.json` d'un dossier choisi (et ses sous-dossiers) vers le nouveau format.

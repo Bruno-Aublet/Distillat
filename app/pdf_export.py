@@ -319,7 +319,7 @@ def _character_flowables(result: BookReport) -> list:
     return flowables
 
 
-def _footer_factory(book_title: str):
+def _footer_factory(book_title: str, ai_model: str):
     def _footer(canvas, doc):
         canvas.saveState()
         y = MARGIN_BOTTOM - 0.9 * cm
@@ -331,6 +331,20 @@ def _footer_factory(book_title: str):
         canvas.drawString(MARGIN_LEFT, y, book_title)
         canvas.setFont(FONT, 8.5)
         canvas.drawRightString(A4[0] - MARGIN_RIGHT, y, str(canvas.getPageNumber()))
+        # Mention visuelle discrète (en plus des métadonnées non affichées
+        # ci-dessous) signalant l'origine IA du contenu, sous la ligne de
+        # séparation existante. Affichée même si ai_model est vide (fiche
+        # résiduelle jamais passée par la migration qui le renseigne
+        # normalement) : un PDF exporté par Distillat porte toujours cette
+        # mention, avec le nom du modèle si connu.
+        canvas.setFont(FONT_ITALIC, 6.5)
+        canvas.setFillColor(INK_MUTED)
+        footer_text = (
+            tr("pdf_export.ai_generated_footer", model=ai_model)
+            if ai_model
+            else tr("pdf_export.ai_generated_footer_unknown_model")
+        )
+        canvas.drawCentredString(A4[0] / 2, y - 10, footer_text)
         canvas.restoreState()
     return _footer
 
@@ -401,7 +415,7 @@ def export_book_report_to_pdf(result: BookReport, output_path: str) -> None:
     story.extend(_tag_heading(tr("pdf_export.analysis_heading")))
     story.extend(_body_flowables(result.analysis_text))
 
-    footer = _footer_factory(result.book_title)
+    footer = _footer_factory(result.book_title, result.ai_model)
     document.build(story, onFirstPage=lambda c, d: None, onLaterPages=footer)
 
     # ReportLab n'écrit que le dictionnaire /Info classique (title=/author=/
