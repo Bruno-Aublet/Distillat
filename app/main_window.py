@@ -1394,6 +1394,27 @@ class PendingResumesDialog(QDialog):
         self.accept()
 
 
+class ClickableLabel(QLabel):
+    """QLabel qui déclenche un callback au clic gauche, quand `enabled` est
+    vrai (utilisé pour le nom du fichier sélectionné : cliquer ouvre
+    l'explorateur Windows sur ce fichier, mais seulement s'il y en a un)."""
+
+    def __init__(self, on_click, parent=None):
+        super().__init__(parent)
+        self.on_click = on_click
+        self.enabled_for_click = False
+
+    def set_click_enabled(self, enabled: bool) -> None:
+        self.enabled_for_click = enabled
+        self.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
+
+    def mousePressEvent(self, event) -> None:
+        if self.enabled_for_click and event.button() == Qt.LeftButton:
+            self.on_click()
+            return
+        super().mousePressEvent(event)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, initial_report_path: str | None = None):
         super().__init__()
@@ -1579,9 +1600,11 @@ class MainWindow(QMainWindow):
             )
         self.drop_zone.set_busy(self.drop_zone.busy)
         if self.selected_book_path:
+            filename = os.path.basename(self.selected_book_path)
             self.file_label.setText(
-                tr("main_window.file_selected", filename=os.path.basename(self.selected_book_path))
+                tr("main_window.file_selected", filename=self._truncate_filename_for_display(filename))
             )
+            self.file_label.setToolTip(filename)
         else:
             self.file_label.setText(tr("main_window.no_file_selected"))
         self.remove_file_button.setText(tr("main_window.remove_file_button"))
@@ -1691,7 +1714,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.drop_zone)
 
         file_row = QHBoxLayout()
-        self.file_label = QLabel(tr("main_window.no_file_selected"))
+        self.file_label = ClickableLabel(self._on_open_selected_file_in_explorer)
+        self.file_label.setText(tr("main_window.no_file_selected"))
         self.file_label.setStyleSheet("color: #555; font-size: 15px; font-weight: bold;")
         self.file_label.setAlignment(Qt.AlignCenter)
         file_row.addStretch()
@@ -1706,6 +1730,8 @@ class MainWindow(QMainWindow):
                 color: #b02a2a;
                 border: none;
                 background: transparent;
+                font-size: 15px;
+                font-weight: bold;
             }
             QPushButton:hover {
                 text-decoration: underline;
@@ -2391,7 +2417,12 @@ class MainWindow(QMainWindow):
         webbrowser.open(project_site_url())
 
     def _on_open_mail(self) -> None:
-        webbrowser.open("mailto:distillatresumeur@gmail.com?subject=Distillat")
+        # Adresse construite dynamiquement plutôt qu'en chaîne littérale pour
+        # limiter le scraping automatisé (bots qui collectent des adresses
+        # email en clair dans le code source public du dépôt) - sans effet
+        # contre une lecture humaine du code, qui reste open source.
+        address = "distillatresumeur" + "@" + "gmail.com"
+        webbrowser.open(f"mailto:{address}?subject=Distillat")
 
     def _on_show_mosaicview_ad(self) -> None:
         MosaicViewAdDialog(self).exec_()
@@ -2448,12 +2479,26 @@ class MainWindow(QMainWindow):
             self._broadcast_resumes_changed()
         self._refresh_pending_resumes_button()
 
+    @staticmethod
+    def _truncate_filename_for_display(filename: str, max_length: int = 60) -> str:
+        """Tronque la fin du nom de fichier (jamais le debut) au-dela de
+        max_length caracteres, pour eviter que la ligne passe sur 2 lignes ou
+        que le centrage du label ne coupe le debut du nom."""
+        if len(filename) <= max_length:
+            return filename
+        return filename[: max_length - 5].rstrip() + " (...)"
+
     def _on_file_selected(self, path: str) -> None:
         if not self._confirm_discard_unsaved_report():
             return
         self._lock_selected_resume_state(path)
         self.selected_book_path = path
-        self.file_label.setText(tr("main_window.file_selected", filename=os.path.basename(path)))
+        filename = os.path.basename(path)
+        self.file_label.setText(
+            tr("main_window.file_selected", filename=self._truncate_filename_for_display(filename))
+        )
+        self.file_label.setToolTip(filename)
+        self.file_label.set_click_enabled(True)
         self.remove_file_button.show()
         self._set_summarize_button_enabled(True)
         self.save_button.setEnabled(False)
@@ -2467,6 +2512,15 @@ class MainWindow(QMainWindow):
         self._report_dirty = False
         self._clear_result_tabs()
 
+    def _on_open_selected_file_in_explorer(self) -> None:
+        if not self.selected_book_path:
+            return
+        try:
+            normalized_path = os.path.normpath(self.selected_book_path)
+            subprocess.Popen(f'explorer /select,"{normalized_path}"')
+        except OSError:
+            pass
+
     def _on_remove_file_clicked(self) -> None:
         if not self._confirm_discard_unsaved_report():
             return
@@ -2474,6 +2528,8 @@ class MainWindow(QMainWindow):
         self._refresh_pending_resumes_button()
         self.selected_book_path = None
         self.file_label.setText(tr("main_window.no_file_selected"))
+        self.file_label.setToolTip("")
+        self.file_label.set_click_enabled(False)
         self.remove_file_button.hide()
         self._set_summarize_button_enabled(False)
         self.save_button.setEnabled(False)

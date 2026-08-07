@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.2] - 2026-08-07 - Reprise plus rapide, protection de l'adresse de contact, corrections d'affichage, ouverture du fichier dans l'Explorateur, allègement de la page web
+
+- Le fichier de reprise d'une génération en lots interrompue par un échec partiel sauvegarde désormais aussi le nombre de tokens du texte du livre déjà calculé, pour éviter de le recalculer inutilement au moment de la reprise.
+- L'adresse mail du bouton "Contact" n'apparaît plus en clair dans le code source de l'application ni dans la page web, pour limiter sa collecte par des robots de scraping.
+- Sur la ligne du fichier sélectionné, le bouton "Retirer" affichait son texte dans une police plus petite que le reste de la ligne, et un nom de fichier long tronquait le début du nom au lieu de sa fin : la police du bouton est désormais alignée sur celle du nom de fichier, et un nom trop long est tronqué proprement en fin de nom avec « (...) », le nom complet restant visible en survolant la ligne (info-bulle). Un style visuel a par ailleurs été défini pour toutes les info-bulles de l'application.
+- Cliquer sur le nom du fichier sélectionné ouvre désormais l'Explorateur Windows dans le dossier de ce fichier, avec focus sur le fichier en question.
+- La page de présentation du projet (`index.html`) est allégée : les copies d'écran, jusqu'ici encodées en base64 directement dans le fichier (le rendant très volumineux), sont désormais des fichiers séparés (`assets/`) dans le dépôt.
+
 ## [1.4.1] - 2026-08-06 - Lisibilité, correction du scroll des personnages, mention IA dans le PDF, bouton de contact
 
 - Ouvrir une fiche de lecture par-dessus une fiche déjà affichée pouvait laisser certains blocs de description de personnage scrollables individuellement au lieu d'afficher tout le texte, la hauteur de ces blocs n'étant recalculée automatiquement que lors d'un redimensionnement de la fenêtre (qui se produit naturellement au tout premier affichage, mais plus ensuite) : elle est désormais aussi recalculée explicitement à chaque remplacement de fiche.

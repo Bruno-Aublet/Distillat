@@ -103,6 +103,15 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     app.setApplicationName("Distillat")
+    app.setStyleSheet(
+        """
+        QToolTip {
+            background-color: #ffffe1;
+            color: #333333;
+            border: 1px solid #999999;
+        }
+        """
+    )
 
     icon_path = config.get_app_icon_path()
     if icon_path.exists():

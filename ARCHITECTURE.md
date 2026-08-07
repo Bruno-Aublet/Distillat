@@ -25,7 +25,12 @@ sauvegarde JSON et/ou export PDF.
   `app/config.py` ci-dessous), enregistre l'association de fichier `.dstl`
   (`config.ensure_dstl_file_association()`), initialise la langue de l'UI
   (`i18n.init_language()`, avant toute construction de fenêtre puisque tous
-  les textes affichés en dépendent), configure l'icône, affiche un splash
+  les textes affichés en dépendent), configure l'icône, applique un style
+  `QToolTip` global (`app.setStyleSheet(...)`, fond jaune pâle `#ffffe1` avec
+  bordure grise) pour que toute info-bulle de l'application garde un
+  contraste visible avec le fond des fenêtres au lieu du style par défaut
+  hérité du thème système (qui pouvait se fondre avec la couleur de fond de
+  l'appli), affiche un splash
   screen (`QSplashScreen`, image `config.get_app_icon_path()` à sa taille
   native 512x512, sans redimensionnement) pendant la construction de
   `MainWindow`, lance `MainWindow`.
@@ -565,10 +570,16 @@ sauvegarde JSON et/ou export PDF.
       illisible...) après qu'au moins un lot a déjà été résumé avec succès,
       `generate_book_report()` lève `PartialGenerationError` (sous-classe de
       `GeminiError` portant `chapter_summaries`/`batches_done`/
-      `batches_total`) au lieu de laisser filer l'erreur brute et perdre ce
-      travail. Les paramètres `resume_chapter_summaries`/`resume_batches_done`
+      `batches_total`/`token_count`) au lieu de laisser filer l'erreur brute
+      et perdre ce travail. Les paramètres
+      `resume_chapter_summaries`/`resume_batches_done`/`resume_token_count`
       permettent de reprendre à partir d'un lot donné sans reformuler les
-      précédents. Voir `app/generation_resume.py` (persistance de cet état
+      précédents ; `resume_token_count` (2026-08-07) évite en particulier de
+      recompter les tokens du texte intégral du livre (`count_tokens()`,
+      calcul local sans appel API, mais dont le résultat conditionne le
+      découpage en lots et l'affichage de progression) à chaque reprise,
+      puisqu'il est déjà connu depuis la tentative précédente. Voir
+      `app/generation_resume.py` (persistance de cet état
       dans `.generation_resume_<hash>.json`, un fichier par livre, dossier de
       config, lié au livre par hash SHA-256 du texte extrait) et
       `app/worker.py`/`app/main_window.py` (sauvegarde sur échec, proposition
@@ -582,7 +593,11 @@ sauvegarde JSON et/ou export PDF.
       reprise correspond au livre en cours, pour ne jamais mélanger dans une
       même fiche des résumés de chapitres produits par deux modèles
       différents - le modèle actif du profil ne s'applique qu'à la prochaine
-      génération lancée sur un livre neuf, sans reprise en attente.
+      génération lancée sur un livre neuf, sans reprise en attente. Depuis le
+      2026-08-07, `ResumeState`/le JSON persisté incluent aussi `token_count`
+      (0 par défaut si absent d'un ancien fichier, auquel cas
+      `_generate_book_report_impl()` le recalcule comme avant plutôt que
+      d'utiliser un 0 littéral).
   - `_call_gemini()` effectue un seul appel, sans retry automatique (voir
     historique de conversation du 2026-07-19 : c'est un choix délibéré,
     l'utilisateur doit recliquer lui-même sur "Résumer") : toute erreur API
@@ -1537,6 +1552,32 @@ laisser croire à une génération réelle.
     `None` a été retiré (audit du 2026-07-22) : sans effet dans ce cas précis
     (la fonction retourne immédiatement `None` sans aucun effet de bord),
     c'était un appel mort.
+  - Ligne du fichier sélectionné (`file_label` + `remove_file_button`,
+    construits dans `_setup_ui()`, mis à jour dans `_on_file_selected()`,
+    `_on_remove_file_clicked()` et `retranslate_ui()`) : le nom de fichier
+    affiché passe systématiquement par `_truncate_filename_for_display()`
+    (tronque la fin au-delà de 60 caractères et ajoute « (...) », jamais le
+    début) pour éviter qu'un nom long ne fasse passer la ligne sur 2 lignes
+    ou ne soit coupé en début de nom par le centrage du label ; le nom
+    complet reste consultable via `file_label.setToolTip()`. Le style du
+    bouton "Retirer" doit rester synchronisé manuellement (`font-size`,
+    `font-weight`) avec celui de `file_label`, les deux stylesheets étant
+    définis indépendamment. `file_label` est une instance de `ClickableLabel`
+    (sous-classe de `QLabel` qui déclenche un callback au clic gauche quand
+    `set_click_enabled(True)` a été appelé) : un clic ouvre l'Explorateur
+    Windows sur le fichier sélectionné via
+    `subprocess.Popen(f'explorer /select,"{normalized_path}"')`
+    (`_on_open_selected_file_in_explorer()`). Le clic n'est activé que
+    lorsqu'un fichier est effectivement sélectionné (`set_click_enabled(True)`
+    dans `_on_file_selected()`, `set_click_enabled(False)` dans
+    `_on_remove_file_clicked()`). Point d'attention : passer la commande à
+    `Popen` comme une seule chaîne (et non comme une liste d'arguments) est
+    volontaire - `explorer.exe` a un parsing d'arguments non standard et
+    n'interprète correctement `/select,"chemin"` que comme un seul token brut
+    sur la ligne de commande ; passé en liste (`["explorer", "/select,",
+    chemin]`), `list2cmdline` insère un espace entre `/select,` et le chemin
+    qui fait échouer la sélection (l'Explorateur s'ouvre alors sur "Ce PC"
+    plutôt que sur le dossier du fichier).
   - `AutoHeightTextEdit` (sous-classe de `QTextEdit` utilisée pour la
     description de chaque personnage dans `_populate_characters_tab()`) :
     ajuste sa hauteur (`setFixedHeight`) à la taille réelle de son contenu via
@@ -1829,7 +1870,11 @@ laisser croire à une génération réelle.
     vers la landing page du projet, ajouté le 2026-07-22), « Contact » (ajouté
     le 2026-08-06, `_on_open_mail()`, ouvre le client mail par défaut vers
     l'adresse de contact du projet avec l'objet "Distillat" prérempli, via un
-    lien `mailto:`) et, ajouté le 2026-08-01, « Publicité éhontée »
+    lien `mailto:` ; adresse construite dynamiquement par concaténation
+    depuis le 2026-08-07 plutôt qu'écrite en chaîne littérale, pour limiter
+    sa collecte par des robots de scraping qui aspirent des adresses email en
+    clair dans le code source public du dépôt - sans effet contre une lecture
+    humaine du code, qui reste open source) et, ajouté le 2026-08-01, « Publicité éhontée »
     (`_on_show_mosaicview_ad()`, ouvre `MosaicViewAdDialog` décrit plus haut) -
     tous ouverts directement via `webbrowser.open()` sauf le dernier, via une
     fenêtre modale. Comme tout texte affiché, chaque bouton de ce footer doit
@@ -1972,32 +2017,18 @@ ni édité à la main directement : toute modification de contenu (textes,
 mise en page, images) doit repasser par une nouvelle génération/publication
 de cet outil, puis un remplacement complet du fichier dans le projet.
 
-**Piège découvert le 2026-07-22, à connaître avant toute modification
-ponctuelle de ce fichier (ex : ajout d'une favicon) :** `index.html` n'est
-pas une page HTML statique classique. C'est un bundler auto-extractible :
-- Le `<head>` visible en clair au tout début du fichier (avant le premier
-  `<script>`) n'est qu'une coquille de chargement temporaire, affichée le
-  temps que le JavaScript s'exécute. Toute balise ajoutée uniquement là
-  (ex. `<link rel="icon">`) est silencieusement perdue - elle n'a aucun
-  effet sur la page finale, sans erreur ni avertissement visible.
-- Au chargement, ce script parse le contenu JSON d'un
-  `<script type="__bundler/template">` (chaîne échappée, à décoder avec
-  `json.loads()` pour l'inspecter/modifier), résout les URLs de ressources
-  (polices, images) en blobs, puis remplace tout
-  `document.documentElement` par le DOM reconstruit depuis ce template
-  (`document.documentElement.replaceWith(...)`). C'est ce `<head>`-là,
-  encodé dans ce JSON, qui est réellement appliqué au document final - pas
-  celui visible en clair au début du fichier.
-- Autre piège rencontré dans une génération ultérieure du même outil : une
-  balise pourtant présente dans le bon JSON du template peut malgré tout
-  rester sans effet si elle est placée dans le `<body>` (ex. dans un
-  élément `<helmet>`/`<x-dc>`, artefact probable d'un renderer React type
-  `react-helmet`) plutôt que dans le vrai `<head>` du template : rien dans
-  ce fichier ne migre le contenu d'un tel `<helmet>` vers le `<head>`, cette
-  balise reste donc totalement inerte pour le navigateur.
-- Pour vérifier ou corriger une balise du `<head>` réellement actif :
-  extraire et parser le JSON de `<script type="__bundler/template">`
-  (`json.loads()` sur son contenu), chercher `</head>` dans le texte décodé,
-  et s'assurer que la balise voulue est bien juste avant, dans le `<head>`
-  du template (jamais dans le head visible en clair du début de fichier, ni
-  dans le `<body>`).
+Depuis le 2026-08-08, `index.html` est au format "dc-runtime" (composant
+`<x-dc>` avec template déclaratif `sc-if`/`sc-for`/`{{ ... }}` et logique
+`Component extends DCLogic` dans un `<script type="text/x-dc" data-dc-script>`,
+runtime JS générique embarqué en toute fin de fichier) plutôt que l'ancien
+bundler auto-extractible basé sur `<script type="__bundler/template">`
+utilisé jusqu'ici (piège aujourd'hui obsolète, qui ne s'applique donc plus).
+Le vrai `<head>` du document est le bloc `<helmet>...</helmet>` juste après
+`<x-dc>` (favicon, meta, polices, styles responsive) : le `<head>` HTML
+visible tout en haut du fichier n'existe que pour le rendu du thumbnail de
+chargement (`#__bundler_thumbnail`) avant l'hydratation JS. Les deux
+copies d'écran de la section héro (`assets/distillat-app-fr.png`,
+`assets/distillat-app-en.png`, sélectionnées selon `isFr`/`isEn` dans
+`renderVals()`) sont des fichiers du dépôt (dossier `assets/`), chargées via
+leur URL GitHub raw plutôt qu'encodées en base64 dans la page comme
+auparavant, ce qui allège nettement le fichier.

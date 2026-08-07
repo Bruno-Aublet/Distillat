@@ -34,6 +34,12 @@ class ResumeState:
     batches_done: int
     batches_total: int
     model: str = _LEGACY_DEFAULT_MODEL
+    # Nombre de tokens du texte intégral du livre (compte local, sans appel
+    # API), calculé une fois avant le découpage en lots : sauvegardé pour ne
+    # pas le recalculer à chaque reprise (0 si absent d'un ancien fichier
+    # sauvegardé avant l'ajout de ce champ, auquel cas l'appelant doit le
+    # recalculer lui-même).
+    token_count: int = 0
 
 
 def compute_book_hash(full_text: str) -> str:
@@ -55,6 +61,7 @@ def save_resume_state(settings_dir: Path, state: ResumeState) -> None:
                     "batches_done": state.batches_done,
                     "batches_total": state.batches_total,
                     "model": state.model,
+                    "token_count": state.token_count,
                 },
                 ensure_ascii=False,
             ),
@@ -74,6 +81,7 @@ def _load_resume_state_from_path(resume_path: Path) -> ResumeState | None:
             batches_done=int(data["batches_done"]),
             batches_total=int(data["batches_total"]),
             model=data.get("model", _LEGACY_DEFAULT_MODEL),
+            token_count=int(data.get("token_count", 0)),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None

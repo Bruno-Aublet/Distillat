@@ -1,2 +1,2 @@
 """Numéro de version de Distillat, source unique de vérité."""
-VERSION = "1.4.1"
+VERSION = "1.4.2"

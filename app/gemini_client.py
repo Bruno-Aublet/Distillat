@@ -96,12 +96,14 @@ class PartialGenerationError(GeminiError):
         chapter_summaries: list[tuple[str, str]],
         batches_done: int,
         batches_total: int,
+        token_count: int,
         error_kind: str | None = None,
     ) -> None:
         super().__init__(message, error_kind=error_kind)
         self.chapter_summaries = chapter_summaries
         self.batches_done = batches_done
         self.batches_total = batches_total
+        self.token_count = token_count
 
 
 @dataclass
@@ -1461,6 +1463,7 @@ def generate_book_report(
     profile_id: str | None = None,
     resume_chapter_summaries: list[tuple[str, str]] | None = None,
     resume_batches_done: int = 0,
+    resume_token_count: int = 0,
     model: str = MODEL_NAME,
 ) -> BookReport:
     """Génère à la suite le résumé, les fiches personnages et l'analyse littéraire
@@ -1470,7 +1473,9 @@ def generate_book_report(
     resume_chapter_summaries/resume_batches_done permettent de reprendre une
     génération en lots interrompue par un échec partiel (voir
     PartialGenerationError) sans reformuler les lots déjà résumés avec
-    succès : ignorés si le livre tient en une seule requête.
+    succès : ignorés si le livre tient en une seule requête. resume_token_count
+    évite de recompter les tokens du texte intégral (calcul local, sans appel
+    API) si déjà connu d'une reprise précédente : 0 s'il doit être recalculé.
 
     Enveloppe de journalisation autour de _generate_book_report_impl : les
     marqueurs DEBUT/FIN/ECHEC du journal d'appels API délimitent chaque
@@ -1499,6 +1504,7 @@ def generate_book_report(
             profile_id=profile_id,
             resume_chapter_summaries=resume_chapter_summaries,
             resume_batches_done=resume_batches_done,
+            resume_token_count=resume_token_count,
             model=model,
         )
     except Exception:
@@ -1525,6 +1531,7 @@ def _generate_book_report_impl(
     profile_id: str | None = None,
     resume_chapter_summaries: list[tuple[str, str]] | None = None,
     resume_batches_done: int = 0,
+    resume_token_count: int = 0,
     model: str = MODEL_NAME,
 ) -> BookReport:
     def report(done: int, total: int, message: str) -> None:
@@ -1546,8 +1553,11 @@ def _generate_book_report_impl(
             model=model,
         )
 
-    report(0, 1, tr("gemini_progress.counting_tokens"))
-    token_count = count_tokens(content.full_text, "texte_integral", model=model)
+    if resume_token_count:
+        token_count = resume_token_count
+    else:
+        report(0, 1, tr("gemini_progress.counting_tokens"))
+        token_count = count_tokens(content.full_text, "texte_integral", model=model)
     leftovers: list[str] = []
 
     if token_count <= get_model_info(model).max_tokens_per_request:
@@ -1654,6 +1664,7 @@ def _generate_book_report_impl(
                         chapter_summaries,
                         batches_done=i - 1,
                         batches_total=len(batches),
+                        token_count=token_count,
                         error_kind=exc.error_kind,
                     ) from exc
                 raise
@@ -1681,6 +1692,7 @@ def _generate_book_report_impl(
                 chapter_summaries,
                 batches_done=len(batches),
                 batches_total=len(batches),
+                token_count=token_count,
                 error_kind=exc.error_kind,
             ) from exc
         if leftover:

@@ -82,6 +82,7 @@ class SummarizeWorker(QThread):
 
             resume_summaries = None
             resume_batches_done = 0
+            resume_token_count = 0
             # Le modèle d'une reprise en cours prime sur le modèle
             # actuellement actif du profil (self.model) : une génération déjà
             # entamée avec un modèle continue avec ce même modèle jusqu'à son
@@ -91,6 +92,7 @@ class SummarizeWorker(QThread):
             if self.resume_state is not None and self.resume_state.book_hash == book_hash:
                 resume_summaries = self.resume_state.chapter_summaries
                 resume_batches_done = self.resume_state.batches_done
+                resume_token_count = self.resume_state.token_count
                 effective_model = self.resume_state.model
 
             result: BookReport = gemini_client.generate_book_report(
@@ -101,6 +103,7 @@ class SummarizeWorker(QThread):
                 profile_id=self.profile_id,
                 resume_chapter_summaries=resume_summaries,
                 resume_batches_done=resume_batches_done,
+                resume_token_count=resume_token_count,
                 model=effective_model,
             )
             generation_resume.clear_resume_state(settings_dir, book_hash)
@@ -115,6 +118,7 @@ class SummarizeWorker(QThread):
                     batches_done=exc.batches_done,
                     batches_total=exc.batches_total,
                     model=effective_model,
+                    token_count=exc.token_count,
                 ),
             )
             self.failed.emit(str(exc), exc.error_kind)
