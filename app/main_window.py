@@ -10,10 +10,11 @@ import webbrowser
 import winsound
 from pathlib import Path
 
-from PyQt5.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt, QTimer
+from PyQt5.QtCore import QBuffer, QEvent, QIODevice, QObject, QPointF, QRectF, Qt, QTimer
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 from PyQt5.QtGui import (
     QColor,
+    QCursor,
     QDragEnterEvent,
     QDropEvent,
     QFont,
@@ -46,6 +47,7 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QTabWidget,
     QTextEdit,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -1415,6 +1417,22 @@ class ClickableLabel(QLabel):
         super().mousePressEvent(event)
 
 
+class _InstantTooltipFilter(QObject):
+    """Event filter affichant le tooltip d'un widget dès l'entrée du curseur
+    (QEvent.Enter), sans attendre le délai de survol par défaut de Qt
+    (~700ms) que QEvent.ToolTip respecte de toute façon même intercepté :
+    seul QEvent.Enter, émis immédiatement au survol, permet un affichage
+    réellement instantané. Pour un avertissement qui doit être vu tout de
+    suite plutôt que découvert par hasard."""
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Enter and watched.toolTip():
+            QToolTip.showText(QCursor.pos(), watched.toolTip(), watched)
+        elif event.type() == QEvent.Leave:
+            QToolTip.hideText()
+        return super().eventFilter(watched, event)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, initial_report_path: str | None = None):
         super().__init__()
@@ -1636,6 +1654,8 @@ class MainWindow(QMainWindow):
         self.result_tabs.setTabText(4, tr("main_window.tab_analysis"))
         if not self.last_result:
             self.characters_placeholder.setText(tr("main_window.characters_placeholder"))
+        if self.worker is None or not self.worker.isRunning():
+            self.status_label.setText(tr("main_window.idle_status"))
         self._update_quota_display(self.quota_tracker.snapshot())
 
     def _build_ui(self) -> None:
@@ -1676,8 +1696,10 @@ class MainWindow(QMainWindow):
         self.quota_limits_button.clicked.connect(self._on_edit_quota_limits)
         header.addWidget(self.quota_limits_button)
         self.active_profile_label = QLabel()
-        self.active_profile_label.setStyleSheet("color: #555;")
+        self._set_profile_label_color(QColor("#555555"))
         self.active_profile_label.setAlignment(Qt.AlignCenter)
+        self._instant_tooltip_filter = _InstantTooltipFilter(self)
+        self.active_profile_label.installEventFilter(self._instant_tooltip_filter)
         header.addWidget(self.active_profile_label)
         self.api_key_button = QPushButton(tr("main_window.profiles_button"))
         self.api_key_button.clicked.connect(self._on_edit_api_key)
@@ -2105,17 +2127,33 @@ class MainWindow(QMainWindow):
             self.quota_tracker.switch_context(api_key, profile.get("model", MODEL_NAME))
             return
 
+    def _set_profile_label_color(self, color: QColor) -> None:
+        palette = self.active_profile_label.palette()
+        palette.setColor(self.active_profile_label.foregroundRole(), color)
+        self.active_profile_label.setPalette(palette)
+
     def _update_profile_label(self) -> None:
         if self.active_profile is not None:
+            model = self.active_profile.get("model", MODEL_NAME)
             self.active_profile_label.setText(
                 tr(
                     "main_window.active_profile_label",
                     name=self.active_profile["name"],
-                    model=self.active_profile.get("model", MODEL_NAME),
+                    model=model,
                 )
             )
+            if model != MODEL_NAME:
+                self._set_profile_label_color(QColor("#b36b00"))
+                self.active_profile_label.setToolTip(
+                    tr("main_window.active_profile_outdated_model_tooltip", model=MODEL_NAME)
+                )
+            else:
+                self._set_profile_label_color(QColor("#555555"))
+                self.active_profile_label.setToolTip("")
         else:
             self.active_profile_label.setText(tr("main_window.no_profile_label"))
+            self._set_profile_label_color(QColor("#555555"))
+            self.active_profile_label.setToolTip("")
 
     def _ensure_api_key(self, prompt_if_missing: bool = True) -> str | None:
         if self.active_profile is not None:

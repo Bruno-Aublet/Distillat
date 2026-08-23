@@ -24,7 +24,7 @@ confidentiels.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.4.2**
+**Version 1.5.0**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
@@ -146,8 +146,9 @@ quota supplémentaire).
 ## Suivi des quotas
 
 Chaque profil de clé API permet de choisir le modèle Gemini utilisé parmi une
-liste (`gemini-3.5-flash` ou `gemini-3.6-flash` à ce jour), via le bouton
-**Profils**. Le palier gratuit de ces deux modèles est actuellement identique :
+liste (`gemini-3.5-flash`, `gemini-3.6-flash` ou `gemini-3.7-flash` à ce
+jour), via le bouton **Profils**. Le palier gratuit de ces trois modèles est
+actuellement identique :
 
 | Limite | Valeur |
 | --- | --- |
@@ -163,6 +164,10 @@ temps**. Vérifiez les vôtres sur
 ajustez-les si besoin via le bouton **Limites de quota** de l'application.
 Chaque profil et chaque modèle a ses propres compteurs et limites, sans
 jamais mélanger leur consommation.
+
+Si le profil actif utilise un modèle différent du modèle par défaut actuel,
+son libellé dans l'en-tête de la fenêtre principale s'affiche en orange, avec
+une info-bulle indiquant qu'un modèle plus récent est disponible.
 
 Avec seulement 20 requêtes par jour, le quota quotidien est le facteur le
 plus limitant : chaque livre consomme au minimum 1 requête (génération),
@@ -296,7 +301,7 @@ its services - avoid submitting sensitive or confidential documents.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
 `.zip` file to download is at the bottom of the release page).
 
-**Version 1.4.2**
+**Version 1.5.0**
 
 Windows application with a PyQt5 interface to generate a complete reading
 report (summaries, characters, analysis) from an EPUB or PDF book, via the
@@ -414,8 +419,9 @@ therefore additional quota).
 ## Quota tracking
 
 Each API key profile lets you choose the Gemini model used from a list
-(`gemini-3.5-flash` or `gemini-3.6-flash` as of now), via the **Profiles**
-button. The free tier of both models is currently identical:
+(`gemini-3.5-flash`, `gemini-3.6-flash` or `gemini-3.7-flash` as of now), via
+the **Profiles** button. The free tier of all three models is currently
+identical:
 
 | Limit | Value |
 | --- | --- |
@@ -431,6 +437,10 @@ over time**. Check your own at
 adjust them if needed via the **Quota limits** button in the application.
 Each profile and each model has its own counters and limits, never mixing
 their consumption.
+
+If the active profile uses a model other than the current default one, its
+label in the main window's header is shown in orange, with a tooltip
+indicating that a newer model is available.
 
 With only 20 requests per day, the daily quota is the most limiting factor:
 each book consumes at least 1 request (generation), more if the book is

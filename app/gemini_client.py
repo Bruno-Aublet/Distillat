@@ -22,8 +22,10 @@ from app.quota_tracker import QuotaSnapshot, QuotaTracker
 # gemini-2.5-flash a été retiré pour les nouvelles clés API en juillet 2026,
 # avant sa date de dépréciation officielle annoncée. gemini-3.5-flash a été le
 # modèle Flash generally available (non-preview) qui lui a succédé, avant
-# gemini-3.6-flash.
-MODEL_NAME = "gemini-3.6-flash"
+# gemini-3.6-flash puis gemini-3.7-flash (voir
+# https://ai.google.dev/gemini-api/docs/deprecations pour suivre les
+# prochaines dépréciations/sorties de modèle).
+MODEL_NAME = "gemini-3.7-flash"
 
 
 @dataclass(frozen=True)
@@ -46,15 +48,17 @@ class ModelInfo:
     max_tokens_per_request: int
 
 
-# gemini-3.5-flash et gemini-3.6-flash partagent actuellement les mêmes
-# caractéristiques (fenêtre de contexte 1 048 576 tokens officielle, TPM
-# gratuit 250 000 constaté au 19/07/2026 pour les deux modèles sur
-# aistudio.google.com/rate-limit) : les valeurs ci-dessous sont donc
-# volontairement identiques pour les deux entrées, pas par oubli. À revoir si
-# un futur modèle aux caractéristiques différentes est ajouté à cette liste.
+# gemini-3.5-flash, gemini-3.6-flash et gemini-3.7-flash partagent
+# actuellement les mêmes caractéristiques (fenêtre de contexte 1 048 576
+# tokens officielle, TPM gratuit 250 000 constaté au 23/08/2026 pour les
+# trois modèles sur aistudio.google.com/rate-limit) : les valeurs ci-dessous
+# sont donc volontairement identiques pour les trois entrées, pas par oubli.
+# À revoir si un futur modèle aux caractéristiques différentes est ajouté à
+# cette liste.
 AVAILABLE_MODELS: list[ModelInfo] = [
     ModelInfo(name="gemini-3.5-flash", max_input_tokens=900_000, max_tokens_per_request=200_000),
     ModelInfo(name="gemini-3.6-flash", max_input_tokens=900_000, max_tokens_per_request=200_000),
+    ModelInfo(name="gemini-3.7-flash", max_input_tokens=900_000, max_tokens_per_request=200_000),
 ]
 
 

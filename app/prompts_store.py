@@ -21,10 +21,7 @@ PROMPT_KEYS = (
 
 # Langue à laquelle rattacher un ancien prompts.json à plat (format antérieur
 # à l'introduction du bilinguisme, sans distinction de langue) : le français
-# était l'unique langue de l'application à cette époque. Ce format à plat a
-# pu être fusionné tel quel dans settings.json par config._merge_legacy_settings_files()
-# (qui ne connaît pas la structure interne des prompts), d'où cette migration
-# gérée ici plutôt que là-bas.
+# était l'unique langue de l'application à cette époque.
 _LEGACY_FORMAT_LANGUAGE = "fr"
 
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.0] - 2026-08-23 - Nouveau modèle Gemini par défaut, avertissement de modèle obsolète, correction de retraduction du statut
+
+- Ajout du modèle `gemini-3.7-flash` à la liste des modèles Gemini proposés au choix par profil, qui devient le nouveau modèle par défaut (à la place de `gemini-3.6-flash`) pour les profils sans modèle explicitement choisi.
+- Quand le profil de clé API actif utilise un modèle Gemini différent du modèle par défaut actuel, le libellé du profil dans l'en-tête de la fenêtre principale s'affiche désormais en orange, avec une info-bulle immédiate expliquant qu'un modèle plus récent est disponible et où le changer.
+- Changer la langue de l'interface pendant que le texte de statut affichait "En attente d'un livre à résumer." (ou son équivalent anglais) le laissait dans l'ancienne langue jusqu'à la prochaine action : il se retraduit désormais immédiatement comme le reste de l'interface.
+
 ## [1.4.2] - 2026-08-07 - Reprise plus rapide, protection de l'adresse de contact, corrections d'affichage, ouverture du fichier dans l'Explorateur, allègement de la page web
 
 - Le fichier de reprise d'une génération en lots interrompue par un échec partiel sauvegarde désormais aussi le nombre de tokens du texte du livre déjà calculé, pour éviter de le recalculer inutilement au moment de la reprise.

@@ -485,7 +485,8 @@ sauvegarde JSON et/ou export PDF.
   (`_client.models.generate_content(...)`/`count_tokens(...)`), résolu depuis
   le paramètre `model` propagé de bout en bout (voir ci-dessous), avec
   `MODEL_NAME` comme valeur par défaut.
-  - `MODEL_NAME = "gemini-3.6-flash"` (`gemini-3.5-flash` jusqu'au 2026-07-23)
+  - `MODEL_NAME = "gemini-3.7-flash"` (`gemini-3.6-flash` jusqu'au 2026-08-23,
+    `gemini-3.5-flash` jusqu'au 2026-07-23)
     reste la valeur par défaut/de rétrocompatibilité, mais depuis le
     2026-07-22 (choix de modèle Gemini par profil, voir `app/config.py`
     ci-dessus) le modèle réellement utilisé est
@@ -501,11 +502,17 @@ sauvegarde JSON et/ou export PDF.
     (repli sur le premier élément de la liste si le nom stocké dans un vieux
     profil ne correspond à aucune entrée connue, ex. modèle retiré depuis).
     Ajouter ou retirer un modèle proposé se limite à modifier cette liste :
-    `gemini-3.5-flash` et `gemini-3.6-flash` y partagent aujourd'hui les
-    mêmes valeurs (`max_input_tokens=900_000`, `max_tokens_per_request=200_000`),
-    par choix documenté en commentaire (specs et quotas gratuits identiques
-    vérifiés le 2026-07-22), pas par oubli - à revoir si un futur modèle aux
-    caractéristiques différentes est ajouté. Le mode JSON forcé
+    `gemini-3.5-flash`, `gemini-3.6-flash` et `gemini-3.7-flash` y partagent
+    aujourd'hui les mêmes valeurs (`max_input_tokens=900_000`,
+    `max_tokens_per_request=200_000`), par choix documenté en commentaire
+    (specs et quotas gratuits identiques vérifiés le 2026-08-23), pas par
+    oubli - à revoir si un futur modèle aux caractéristiques différentes est
+    ajouté. Page officielle à surveiller pour
+    la disponibilité et la dépréciation des modèles Gemini (déclenche la mise
+    à jour de `AVAILABLE_MODELS`/`MODEL_NAME`) :
+    https://ai.google.dev/gemini-api/docs/deprecations - surveillée via une
+    alerte externe VisualPing (pas de vérification automatique dans
+    l'application). Le mode JSON forcé
     (`response_mime_type="application/json"`, pour fiabiliser le JSON en
     sortie) est un `genai_types.GenerateContentConfig` passé en paramètre
     `config=` de chaque appel de génération (`_JSON_GENERATION_CONFIG`), pas
@@ -514,7 +521,7 @@ sauvegarde JSON et/ou export PDF.
     texte intégral, puis deux cas selon ce compte, plus un repli particulier
     au sein du second (voir plus bas) :
     - **Texte tient dans `max_tokens_per_request` du `ModelInfo` résolu (200k
-      pour les deux modèles actuels)** : un seul appel
+      pour les trois modèles actuels)** : un seul appel
       combiné demandant résumé court + détaillé + personnages + analyse en
       JSON (`_full_report_prompt`, prompt par défaut `full_report`).
     - **Texte trop long** : `_split_chapters_into_batches()` répartit les
@@ -1513,7 +1520,22 @@ laisser croire à une génération réelle.
     (`profile.get("model", MODEL_NAME)`) sur deux lignes distinctes (`\n`
     dans la clé de traduction `main_window.active_profile_label`, `Qt.AlignCenter`),
     rafraîchi par `_update_profile_label()` à chaque changement de profil
-    actif ou de modèle via la fenêtre **Profils**.
+    actif ou de modèle via la fenêtre **Profils**. Depuis le 2026-08-23, si le
+    modèle du profil actif diffère de `MODEL_NAME` (modèle par défaut actuel,
+    ex. un profil resté sur `gemini-3.5-flash` après l'ajout de
+    `gemini-3.7-flash`), le label passe en couleur orange (`#b36b00`, via
+    `_set_profile_label_color()` qui modifie la `QPalette` du label plutôt
+    que son `styleSheet` - une feuille de style Qt sur le widget se propage
+    aussi à son tooltip, ce qui aurait teinté le texte de l'info-bulle en
+    orange) et affiche un tooltip explicatif
+    (`main_window.active_profile_outdated_model_tooltip`) invitant à changer
+    de modèle dans **Profils**. Ce tooltip s'affiche sans le délai de survol
+    par défaut de Qt (~700ms) grâce à `_InstantTooltipFilter` (event filter
+    installé sur `active_profile_label`), qui déclenche `QToolTip.showText()`
+    dès `QEvent.Enter` plutôt que d'attendre `QEvent.ToolTip` (émis par Qt
+    seulement après le délai natif, donc inefficace pour un affichage
+    instantané même intercepté) et masque le tooltip explicitement sur
+    `QEvent.Leave`.
   - `setMinimumSize(400, 300)` (appelé dans `__init__`, avant
     `_size_to_available_screen()` qui dimensionne/positionne la fenêtre à
     l'ouverture) : sans cet appel, Qt calcule automatiquement une taille

@@ -209,6 +209,7 @@
     "quota_limits_button": "Limites de quota",
     "profiles_button": "Profils",
     "active_profile_label": "Profil : {name}\nModèle : {model}",
+    "active_profile_outdated_model_tooltip": "Ce profil n'utilise pas le modèle\nGemini le plus récent ({model}).\nVous pouvez le changer dans Profils.",
     "no_profile_label": "Aucun profil actif",
     "output_language_hint": "Les fiches sont générées en français : ce réglage détermine aussi la langue des résumés produits par Gemini.",
     "update_banner": "<a href=\"#\">🆕 Une nouvelle version de Distillat est disponible (v{version}), cliquez pour la télécharger</a>",
