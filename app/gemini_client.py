@@ -22,10 +22,17 @@ from app.quota_tracker import QuotaSnapshot, QuotaTracker
 # gemini-2.5-flash a été retiré pour les nouvelles clés API en juillet 2026,
 # avant sa date de dépréciation officielle annoncée. gemini-3.5-flash a été le
 # modèle Flash generally available (non-preview) qui lui a succédé, avant
-# gemini-3.6-flash puis gemini-3.7-flash (voir
-# https://ai.google.dev/gemini-api/docs/deprecations pour suivre les
-# prochaines dépréciations/sorties de modèle).
-MODEL_NAME = "gemini-3.7-flash"
+# gemini-3.6-flash, gemini-3.7-flash, gemini-3.8-flash puis gemini-4-hydrogen
+# (premier modèle Gemini 4 disponible au palier gratuit, modèle par défaut
+# depuis le 2026-11-20). gemini-3.5-flash
+# et gemini-3.7-flash ont été dépréciés par Google le 2026-10-08 (requêtes
+# redirigées côté serveur vers gemini-3.6-flash et gemini-3.8-flash
+# respectivement) et retirés de AVAILABLE_MODELS ci-dessous. Voir
+# https://aistudio.google.com/docs/deprecations (anciennement
+# https://ai.google.dev/gemini-api/docs/deprecations, qui redirige désormais
+# vers la nouvelle adresse) pour suivre les prochaines dépréciations/sorties
+# de modèle.
+MODEL_NAME = "gemini-4-hydrogen"
 
 
 @dataclass(frozen=True)
@@ -41,24 +48,51 @@ class ModelInfo:
     requête envoyée. max_tokens_per_request garde une marge sous la vraie
     limite TPM constatée (voir aistudio.google.com/rate-limit) pour absorber
     l'écart entre le tokenizer local (count_tokens) et le décompte serveur
-    exact."""
+    exact.
+
+    thinking_level force le niveau de réflexion envoyé à l'API pour ce
+    modèle (thinking_config de GenerateContentConfig) ; None laisse le niveau
+    par défaut choisi par Google pour ce modèle (aucun thinking_config
+    envoyé)."""
 
     name: str
     max_input_tokens: int
     max_tokens_per_request: int
+    thinking_level: genai_types.ThinkingLevel | None = None
 
 
-# gemini-3.5-flash, gemini-3.6-flash et gemini-3.7-flash partagent
-# actuellement les mêmes caractéristiques (fenêtre de contexte 1 048 576
-# tokens officielle, TPM gratuit 250 000 constaté au 23/08/2026 pour les
-# trois modèles sur aistudio.google.com/rate-limit) : les valeurs ci-dessous
-# sont donc volontairement identiques pour les trois entrées, pas par oubli.
-# À revoir si un futur modèle aux caractéristiques différentes est ajouté à
-# cette liste.
+# gemini-3.6-flash, gemini-3.8-flash et gemini-4-hydrogen partagent
+# actuellement les mêmes caractéristiques utiles ici (fenêtre de contexte
+# 1 048 576 tokens officielle, palier gratuit 5 RPM / 250 000 TPM / 20 RPD
+# constaté le 2026-11-20 pour les trois modèles sur
+# aistudio.google.com/rate-limit) : les valeurs ci-dessous sont donc
+# volontairement identiques pour les trois entrées, pas par oubli. Nuance pour
+# gemini-4-hydrogen : sa fenêtre de 1 048 576 tokens est unifiée (entrée,
+# réflexion et sortie partagent le même budget, alors que les modèles 3.x
+# séparent 1M en entrée et 64K en sortie) ; max_input_tokens=900_000 laisse
+# environ 148 000 tokens pour la réflexion et la réponse, au-delà du plafond
+# de sortie synchrone de 65 536 tokens, donc la même valeur convient. À revoir
+# si un futur modèle aux caractéristiques différentes est ajouté à cette
+# liste.
+#
+# thinking_level=MEDIUM pour gemini-4-hydrogen (2026-11-20, demande de
+# l'utilisateur) : Google y règle la réflexion sur "high" par défaut (contre
+# "medium" pour gemini-3.8-flash), or les tokens de réflexion sont décomptés
+# du même plafond de 65 536 tokens de sortie que la réponse elle-même ; une
+# réflexion plus longue réduit d'autant la place restante pour le JSON de la
+# fiche, avec un risque de réponse tronquée sur les gros livres (cf. les
+# arrêts prématurés déjà rencontrés, voir ARCHITECTURE.md). MEDIUM aligne
+# Hydrogen sur le comportement par défaut de gemini-3.8-flash. Les modèles
+# 3.x gardent le niveau par défaut de Google (aucun thinking_config envoyé).
 AVAILABLE_MODELS: list[ModelInfo] = [
-    ModelInfo(name="gemini-3.5-flash", max_input_tokens=900_000, max_tokens_per_request=200_000),
     ModelInfo(name="gemini-3.6-flash", max_input_tokens=900_000, max_tokens_per_request=200_000),
-    ModelInfo(name="gemini-3.7-flash", max_input_tokens=900_000, max_tokens_per_request=200_000),
+    ModelInfo(name="gemini-3.8-flash", max_input_tokens=900_000, max_tokens_per_request=200_000),
+    ModelInfo(
+        name="gemini-4-hydrogen",
+        max_input_tokens=900_000,
+        max_tokens_per_request=200_000,
+        thinking_level=genai_types.ThinkingLevel.MEDIUM,
+    ),
 ]
 
 
@@ -231,7 +265,22 @@ def configure(api_key: str) -> None:
     _client = genai.Client(api_key=api_key, http_options=_HTTP_OPTIONS_NO_RETRY)
 
 
-_JSON_GENERATION_CONFIG = genai_types.GenerateContentConfig(response_mime_type="application/json")
+def _generation_config(json_mode: bool, model: str) -> genai_types.GenerateContentConfig | None:
+    """Config de generate_content pour cet appel : mode JSON forcé si
+    json_mode, et niveau de réflexion propre au modèle (ModelInfo.thinking_level)
+    s'il en définit un. Le niveau de réflexion n'est appliqué que si le nom
+    du modèle correspond exactement à une entrée de AVAILABLE_MODELS :
+    get_model_info() retombe sur le premier modèle de la liste pour un nom
+    inconnu (ex. modèle retiré stocké dans un vieux profil), dont le réglage
+    ne doit pas être appliqué à un autre modèle. None si rien à configurer
+    (même comportement qu'avant l'ajout de thinking_level)."""
+    kwargs = {}
+    if json_mode:
+        kwargs["response_mime_type"] = "application/json"
+    model_info = get_model_info(model)
+    if model_info.name == model and model_info.thinking_level is not None:
+        kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_level=model_info.thinking_level)
+    return genai_types.GenerateContentConfig(**kwargs) if kwargs else None
 
 # count_tokens() garde le retry par défaut du SDK (contrairement à
 # generate_content, voir _HTTP_OPTIONS_NO_RETRY) : appel gratuit sur un quota
@@ -465,7 +514,7 @@ def _call_gemini(
             # google-generativeai - même risque avec google-genai si le
             # retry par défaut restait actif). Sans lui, un appel applicatif
             # = exactement une requête serveur.
-            config = _JSON_GENERATION_CONFIG if json_mode else None
+            config = _generation_config(json_mode, model)
             response = _client.models.generate_content(model=model, contents=prompt, config=config)
             usage = response.usage_metadata
             # candidates_token_count peut être None (constaté le 2026-07-21

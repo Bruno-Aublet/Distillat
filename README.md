@@ -24,7 +24,7 @@ confidentiels.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) (le fichier
 `.zip` à télécharger se trouve tout en bas de la page de la release).
 
-**Version 1.5.0**
+**Version 1.5.1**
 
 Application Windows avec interface PyQt5 pour générer une fiche de lecture
 complète (résumés, personnages, analyse) à partir d'un livre EPUB ou PDF, via
@@ -146,7 +146,7 @@ quota supplémentaire).
 ## Suivi des quotas
 
 Chaque profil de clé API permet de choisir le modèle Gemini utilisé parmi une
-liste (`gemini-3.5-flash`, `gemini-3.6-flash` ou `gemini-3.7-flash` à ce
+liste (`gemini-3.6-flash`, `gemini-3.8-flash` ou `gemini-4-hydrogen` à ce
 jour), via le bouton **Profils**. Le palier gratuit de ces trois modèles est
 actuellement identique :
 
@@ -301,7 +301,7 @@ its services - avoid submitting sensitive or confidential documents.
 [Releases](https://github.com/Bruno-Aublet/Distillat/releases) page (the
 `.zip` file to download is at the bottom of the release page).
 
-**Version 1.5.0**
+**Version 1.5.1**
 
 Windows application with a PyQt5 interface to generate a complete reading
 report (summaries, characters, analysis) from an EPUB or PDF book, via the
@@ -419,7 +419,7 @@ therefore additional quota).
 ## Quota tracking
 
 Each API key profile lets you choose the Gemini model used from a list
-(`gemini-3.5-flash`, `gemini-3.6-flash` or `gemini-3.7-flash` as of now), via
+(`gemini-3.6-flash`, `gemini-3.8-flash` or `gemini-4-hydrogen` as of now), via
 the **Profiles** button. The free tier of all three models is currently
 identical:
 

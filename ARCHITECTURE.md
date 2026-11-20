@@ -485,8 +485,9 @@ sauvegarde JSON et/ou export PDF.
   (`_client.models.generate_content(...)`/`count_tokens(...)`), résolu depuis
   le paramètre `model` propagé de bout en bout (voir ci-dessous), avec
   `MODEL_NAME` comme valeur par défaut.
-  - `MODEL_NAME = "gemini-3.7-flash"` (`gemini-3.6-flash` jusqu'au 2026-08-23,
-    `gemini-3.5-flash` jusqu'au 2026-07-23)
+  - `MODEL_NAME = "gemini-4-hydrogen"` (`gemini-3.7-flash` jusqu'au 2026-11-20,
+    `gemini-3.6-flash` jusqu'au 2026-08-23, `gemini-3.5-flash` jusqu'au
+    2026-07-23)
     reste la valeur par défaut/de rétrocompatibilité, mais depuis le
     2026-07-22 (choix de modèle Gemini par profil, voir `app/config.py`
     ci-dessus) le modèle réellement utilisé est
@@ -502,21 +503,54 @@ sauvegarde JSON et/ou export PDF.
     (repli sur le premier élément de la liste si le nom stocké dans un vieux
     profil ne correspond à aucune entrée connue, ex. modèle retiré depuis).
     Ajouter ou retirer un modèle proposé se limite à modifier cette liste :
-    `gemini-3.5-flash`, `gemini-3.6-flash` et `gemini-3.7-flash` y partagent
-    aujourd'hui les mêmes valeurs (`max_input_tokens=900_000`,
-    `max_tokens_per_request=200_000`), par choix documenté en commentaire
-    (specs et quotas gratuits identiques vérifiés le 2026-08-23), pas par
+    `gemini-3.6-flash`, `gemini-3.8-flash` et `gemini-4-hydrogen` (ajouté le
+    2026-11-20) y partagent aujourd'hui les mêmes valeurs
+    (`max_input_tokens=900_000`, `max_tokens_per_request=200_000`), par choix
+    documenté en commentaire (fenêtre de contexte et quotas gratuits
+    5 RPM / 250 000 TPM / 20 RPD identiques vérifiés le 2026-11-20), pas par
     oubli - à revoir si un futur modèle aux caractéristiques différentes est
-    ajouté. Page officielle à surveiller pour
+    ajouté. `gemini-4-hydrogen` a une fenêtre de 1 048 576 tokens unifiée
+    (entrée, réflexion et sortie partagent le même budget), contrairement aux
+    modèles 3.x : `max_input_tokens=900_000` y laisse environ 148 000 tokens
+    pour la réflexion et la réponse, au-delà de son plafond de sortie
+    synchrone de 65 536 tokens. Les autres changements d'API de Gemini 4
+    (paramètres `temperature`/`top_p`/`top_k` ignorés, niveau de réflexion
+    `minimal` refusé, cache explicite non supporté) ne concernent pas
+    Distillat, qui n'envoie que `response_mime_type="application/json"` et,
+    pour les modèles qui le définissent, un niveau de réflexion.
+    `ModelInfo.thinking_level` (ajouté le 2026-11-20, `None` par défaut =
+    niveau choisi par Google, aucun `thinking_config` envoyé) force ce niveau
+    via `_generation_config(json_mode, model)`, qui construit la
+    `GenerateContentConfig` de chaque appel `generate_content` (remplace
+    l'ancienne constante `_JSON_GENERATION_CONFIG`). Seul
+    `gemini-4-hydrogen` le définit (`ThinkingLevel.MEDIUM`, demande de
+    l'utilisateur) : Google y règle la réflexion sur `high` par défaut
+    (contre `medium` pour `gemini-3.8-flash`), or les tokens de réflexion
+    sont décomptés du même plafond de 65 536 tokens de sortie que la
+    réponse, d'où un risque de fiche JSON tronquée sur les gros livres. Le
+    niveau n'est appliqué que si le nom du modèle correspond exactement à
+    une entrée de la liste (jamais via le repli de `get_model_info()` sur un
+    nom inconnu).
+    `gemini-3.5-flash` et `gemini-3.7-flash`, dépréciés par Google le
+    2026-10-08 (requêtes redirigées côté serveur vers `gemini-3.6-flash` et
+    `gemini-3.8-flash` respectivement, sans coupure de l'endpoint), ont été
+    retirés de la liste le 2026-11-20. Un profil encore enregistré avec l'un
+    d'eux continue de fonctionner (le nom est envoyé tel quel à l'API, qui
+    redirige), `get_model_info()` retombe sur le premier élément de la liste
+    et le label du profil actif passe en orange (modèle différent de
+    `MODEL_NAME`, voir `main_window.py`). Page officielle à surveiller pour
     la disponibilité et la dépréciation des modèles Gemini (déclenche la mise
     à jour de `AVAILABLE_MODELS`/`MODEL_NAME`) :
-    https://ai.google.dev/gemini-api/docs/deprecations - surveillée via une
-    alerte externe VisualPing (pas de vérification automatique dans
-    l'application). Le mode JSON forcé
+    https://aistudio.google.com/docs/deprecations (anciennement
+    https://ai.google.dev/gemini-api/docs/deprecations, qui y redirige
+    désormais) - surveillée via une alerte externe VisualPing (pas de
+    vérification automatique dans l'application). Le mode JSON forcé
     (`response_mime_type="application/json"`, pour fiabiliser le JSON en
     sortie) est un `genai_types.GenerateContentConfig` passé en paramètre
-    `config=` de chaque appel de génération (`_JSON_GENERATION_CONFIG`), pas
-    un modèle séparé comme avec l'ancien SDK.
+    `config=` de chaque appel de génération (construit par
+    `_generation_config(json_mode, model)`, qui y ajoute aussi le niveau de
+    réflexion propre au modèle s'il en définit un, voir ci-dessus), pas un
+    modèle séparé comme avec l'ancien SDK.
   - `generate_book_report()` est le point d'entrée : compte les tokens du
     texte intégral, puis deux cas selon ce compte, plus un repli particulier
     au sein du second (voir plus bas) :
@@ -1308,8 +1342,8 @@ sauvegarde JSON et/ou export PDF.
   dérivent un fichier `.quota_state_<hash>_<modele>.json` par (clé, modèle)
   depuis l'introduction du choix de modèle par profil (2026-07-22) : chaque
   modèle utilisé avec une même clé a ses propres compteurs, même si
-  `gemini-3.5-flash` et `gemini-3.6-flash` partagent aujourd'hui les mêmes
-  limites.
+  `gemini-3.6-flash`, `gemini-3.8-flash` et `gemini-4-hydrogen` partagent
+  aujourd'hui les mêmes limites.
   `switch_context(api_key, model)` : no-op si ni le hash ni le modèle n'ont
   changé depuis le dernier appel (ou l'initialisation) ; sinon réinitialise
   tout l'état en
@@ -1522,8 +1556,15 @@ laisser croire à une génération réelle.
     rafraîchi par `_update_profile_label()` à chaque changement de profil
     actif ou de modèle via la fenêtre **Profils**. Depuis le 2026-08-23, si le
     modèle du profil actif diffère de `MODEL_NAME` (modèle par défaut actuel,
-    ex. un profil resté sur `gemini-3.5-flash` après l'ajout de
-    `gemini-3.7-flash`), le label passe en couleur orange (`#b36b00`, via
+    ex. un profil resté sur `gemini-3.6-flash` ou `gemini-3.8-flash` après
+    l'ajout de `gemini-4-hydrogen`, ou sur un modèle retiré depuis de la
+    liste comme `gemini-3.7-flash`). Cette règle suppose que `MODEL_NAME` est
+    toujours le modèle le plus récent de `AVAILABLE_MODELS` (le tooltip
+    affirme que le profil "n'utilise pas le modèle le plus récent") : un
+    modèle plus récent que `MODEL_NAME` ajouté sans en faire le défaut serait
+    signalé à tort comme obsolète (constaté le 2026-11-20 en ajoutant
+    `gemini-4-hydrogen` avec `gemini-3.8-flash` encore par défaut, résolu en
+    faisant de `gemini-4-hydrogen` le nouveau défaut), le label passe en couleur orange (`#b36b00`, via
     `_set_profile_label_color()` qui modifie la `QPalette` du label plutôt
     que son `styleSheet` - une feuille de style Qt sur le widget se propage
     aussi à son tooltip, ce qui aurait teinté le texte de l'info-bulle en

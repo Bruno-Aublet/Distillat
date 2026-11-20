@@ -10,7 +10,7 @@ import webbrowser
 import winsound
 from pathlib import Path
 
-from PyQt5.QtCore import QBuffer, QEvent, QIODevice, QObject, QPointF, QRectF, Qt, QTimer
+from PyQt5.QtCore import QBuffer, QEvent, QIODevice, QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 from PyQt5.QtGui import (
     QColor,
@@ -509,7 +509,17 @@ class ProfilesDialog(QDialog):
     active_profile (attribut public, relu par l'appelant après exec_()) est
     initialisé au profil actuellement actif de l'instance, et mis à jour si
     l'utilisateur en sélectionne un autre via le bouton "Utiliser" - jamais
-    modifié par un simple Ajouter/Renommer/Supprimer d'un profil différent."""
+    modifié par un simple Ajouter/Renommer/Supprimer d'un profil différent.
+
+    active_profile_changed est émis dès que active_profile est modifié en
+    interne (édition du profil actif, suppression du profil actif,
+    changement via "Utiliser"), pour permettre à l'appelant de rafraîchir son
+    propre affichage pendant que ce dialogue est encore ouvert, plutôt que
+    d'attendre sa fermeture (bug corrigé le 2026-08-24 : le modèle affiché
+    sur la fenêtre principale ne se mettait pas à jour tant que la fenêtre de
+    gestion des comptes restait ouverte)."""
+
+    active_profile_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -701,6 +711,7 @@ class ProfilesDialog(QDialog):
                 self.active_profile = {"id": profile["id"], "name": name, "model": model}
                 if self._quota_tracker is not None:
                     self._quota_tracker.switch_context(api_key, model)
+                self.active_profile_changed.emit()
         finally:
             if not is_active_here:
                 instance_lock.release_profile_lock(profile["id"])
@@ -745,6 +756,7 @@ class ProfilesDialog(QDialog):
             if self.active_profile is not None and self.active_profile["id"] == profile["id"]:
                 instance_lock.release_profile_lock(profile["id"])
                 self.active_profile = None
+                self.active_profile_changed.emit()
             config.delete_profile_api_key(profile["id"])
             # config.remove_profile() relit et réécrit la liste sous le verrou
             # inter-processus de settings.json (voir _on_add_clicked()).
@@ -799,6 +811,7 @@ class ProfilesDialog(QDialog):
         # entre le nom de profil affiché et le compteur de quota affiché.
         if api_key and self._quota_tracker is not None:
             self._quota_tracker.switch_context(api_key, profile.get("model", MODEL_NAME))
+        self.active_profile_changed.emit()
         self._reload_list()
 
 
@@ -2164,6 +2177,18 @@ class MainWindow(QMainWindow):
             return None
         return self._prompt_for_api_key()
 
+    def _on_profiles_dialog_active_profile_changed(self, dialog: "ProfilesDialog") -> None:
+        """Rafraîchit immédiatement le libellé de profil actif (nom, modèle)
+        pendant que ProfilesDialog est encore ouvert, dès que son
+        active_profile change (édition du profil actif, suppression du
+        profil actif, changement via "Utiliser") - plutôt que d'attendre sa
+        fermeture (bug corrigé le 2026-08-24 : le modèle affiché restait
+        celui d'avant modification tant que la fenêtre de gestion des
+        comptes restait ouverte)."""
+        self.active_profile = dialog.active_profile
+        self._update_profile_label()
+        self._update_quota_display(self.quota_tracker.snapshot())
+
     def _prompt_for_api_key(self) -> str | None:
         generation_in_progress = self.worker is not None and self.worker.isRunning()
         dialog = ProfilesDialog(
@@ -2171,6 +2196,9 @@ class MainWindow(QMainWindow):
             quota_tracker=self.quota_tracker,
             active_profile=self.active_profile,
             generation_in_progress=generation_in_progress,
+        )
+        dialog.active_profile_changed.connect(
+            lambda: self._on_profiles_dialog_active_profile_changed(dialog)
         )
         dialog.exec_()
         self.active_profile = dialog.active_profile

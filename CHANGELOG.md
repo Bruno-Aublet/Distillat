@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.1] - 2026-08-24 - Gemini 4 Hydrogen par défaut, retrait des modèles dépréciés, correction de l'affichage du modèle après modification d'un profil actif
+
+- Modifier le modèle Gemini du profil de clé API actuellement actif depuis la fenêtre "Profils" ne mettait à jour le libellé du profil affiché dans l'en-tête de la fenêtre principale (nom et modèle) qu'à la fermeture complète de cette fenêtre : il se met désormais à jour immédiatement, fenêtre "Profils" encore ouverte.
+- Modèles Gemini proposés : retrait de `gemini-3.5-flash` et `gemini-3.7-flash` (dépréciés par Google le 8 octobre 2026, leurs requêtes étant redirigées vers `gemini-3.6-flash` et `gemini-3.8-flash`), ajout de `gemini-3.8-flash` et de `gemini-4-hydrogen`, nouveau modèle par défaut, disponible au palier gratuit avec les mêmes limites (5 RPM, 250 000 TPM, 20 RPD). Un profil encore réglé sur un modèle plus ancien ou retiré continue de fonctionner et est signalé en orange.
+- Avec `gemini-4-hydrogen`, le niveau de réflexion du modèle est réglé sur "medium" (au lieu de "high", réglage par défaut de Google pour ce modèle), comme pour `gemini-3.8-flash` : la réflexion étant décomptée de la même limite de taille que la réponse, ce réglage réduit le risque d'une fiche incomplète sur les gros livres.
+
 ## [1.5.0] - 2026-08-23 - Nouveau modèle Gemini par défaut, avertissement de modèle obsolète, correction de retraduction du statut
 
 - Ajout du modèle `gemini-3.7-flash` à la liste des modèles Gemini proposés au choix par profil, qui devient le nouveau modèle par défaut (à la place de `gemini-3.6-flash`) pour les profils sans modèle explicitement choisi.
